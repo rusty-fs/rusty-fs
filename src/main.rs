@@ -7,9 +7,7 @@
 use std::{fs::FileType, os::unix::{fs::PermissionsExt, raw::mode_t}, sync::Arc};
 
 use axum::{
-    Extension, Json, Router,
-    http::StatusCode,
-    routing::{delete, get, put},
+    extract::Path, http::{request, StatusCode}, routing::{delete, get, put}, Extension, Json, Router
 };
 use serde::{Serialize, Serializer};
 use serde::ser::SerializeStruct;
@@ -38,8 +36,11 @@ async fn main() {
 
     // build our application with a route
     let app = Router::new()
+        .route("/list", get(list)) 
         .route("/list/", get(list))
-        .route("/list", get(list))
+        .route("/list/{*path}", get(list))
+        // .route("/list", get(list))
+        .route("/meta/{*file_path}", get(meta))
         .layer(Extension(shared_base_dir));
         // .route("/files/:filename", get(get_file));
     // .route("/files/:filename", put(create_file))
@@ -51,15 +52,84 @@ async fn main() {
 }
 
 // handler to list files
-#[axum::debug_handler]
-async fn list(Extension(base_dir): Extension<Arc<String>>) -> Json<serde_json::Value> {
-    // logic to list files
-    info!("Listing files in the directory: {}", base_dir);
-    // List files logic
+// #[axum::debug_handler]
+// async fn list(Extension(base_dir): Extension<Arc<String>>) -> Json<serde_json::Value> {
+//     // logic to list files
+//     info!("Listing files in the directory: {}", base_dir);
+//     // List files logic
 
-    let entries = fs::read_dir(base_dir.as_str())
+//     let entries = fs::read_dir(base_dir.as_str())
+//         .map_err(|e| {
+//             error!("Failed to read directory: {}", e);
+//             StatusCode::INTERNAL_SERVER_ERROR
+//         })
+//         .ok();
+
+//     let mut file_list = Vec::new();
+//     if let Some(resolved) = entries {
+//         for entry in resolved {
+//             match entry {
+//                 Ok(entry) => {
+//                     let metadata = entry.metadata();
+//                     match metadata {
+//                         Ok(meta) => {
+//                             let modified_time = meta
+//                                 .modified()
+//                                 .ok()
+//                                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+//                                 .map(|duration| duration.as_secs());
+
+
+//                             let file_type = meta.file_type();
+//                             let is_dir = file_type.is_dir();
+//                             let size = meta.len();
+//                             let permissions = meta.permissions();
+//                             file_list.push(FileEntry {
+//                                 name: entry.file_name().to_string_lossy().into_owned(),
+//                                 is_dir: is_dir,
+//                                 size: size,
+//                                 modified: modified_time,
+//                                 permissions: Some(permissions.mode() as mode_t),     
+//                             });
+//                         }
+//                         Err(e) => {
+//                             error!("Failed to get metadata for entry: {}", e);
+//                         }
+//                     }
+//                 }
+//                 Err(e) => {
+//                     error!("Failed to read entry: {}", e);
+//                     return Json(json!({
+//                         "error": "Failed to read directory entries"
+//                     }));
+//                 }
+//             }
+//         }
+//     }
+
+//     // Encode the response as a json
+//     Json(json!({
+//         "files": file_list,
+//         "message": "Files listed successfully"
+//     }))
+// }
+
+
+async fn list(requested_path: Option<Path<String>>, base_dir: Extension<Arc<String>>) -> Json<serde_json::Value> {
+    let requested_path = requested_path.map(|p| p.0).unwrap_or_default();
+
+    let requested = requested_path.trim_start_matches('/').to_string();
+    let full_path = if requested.is_empty() {
+        base_dir.trim_end_matches('/').to_string()
+    } else {
+        format!("{}/{}", base_dir.trim_end_matches('/'), requested)
+    };
+
+    info!("Listing files in: {} -> {}", requested, full_path);
+
+    let entries = fs::read_dir(&full_path)
         .map_err(|e| {
-            error!("Failed to read directory: {}", e);
+            error!("Failed to read directory {}: {}", full_path, e);
             StatusCode::INTERNAL_SERVER_ERROR
         })
         .ok();
@@ -78,32 +148,35 @@ async fn list(Extension(base_dir): Extension<Arc<String>>) -> Json<serde_json::V
                                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
                                 .map(|duration| duration.as_secs());
 
-
                             let file_type = meta.file_type();
                             let is_dir = file_type.is_dir();
                             let size = meta.len();
                             let permissions = meta.permissions();
                             file_list.push(FileEntry {
                                 name: entry.file_name().to_string_lossy().into_owned(),
-                                is_dir: is_dir,
-                                size: size,
+                                is_dir,
+                                size,
                                 modified: modified_time,
                                 permissions: Some(permissions.mode() as mode_t),     
                             });
                         }
                         Err(e) => {
-                            error!("Failed to get metadata for entry: {}", e);
+                            error!("Failed to get metadata for entry in {}: {}", full_path, e);
                         }
                     }
                 }
                 Err(e) => {
-                    error!("Failed to read entry: {}", e);
+                    error!("Failed to read entry in {}: {}", full_path, e);
                     return Json(json!({
                         "error": "Failed to read directory entries"
                     }));
                 }
             }
         }
+    } else {
+        return Json(json!({
+            "error": "Failed to read directory"
+        }));
     }
 
     // Encode the response as a json
@@ -111,6 +184,47 @@ async fn list(Extension(base_dir): Extension<Arc<String>>) -> Json<serde_json::V
         "files": file_list,
         "message": "Files listed successfully"
     }))
+}
+
+
+
+async fn meta(file_path: Path<String>, base_dir: Extension<Arc<String>>) -> Json<serde_json::Value> {
+    let requested = file_path.trim_start_matches('/').to_string();
+    let full_path = if requested.is_empty() {
+        base_dir.trim_end_matches('/').to_string()
+    } else {
+        format!("{}/{}", base_dir.trim_end_matches('/'), requested)
+    };
+
+    info!("Getting metadata for: {} -> {}", requested, full_path);
+
+    match fs::metadata(&full_path) {
+        Ok(meta) => {
+            let modified_time = meta
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs());
+            let file_type = meta.file_type();
+            let is_dir = file_type.is_dir();
+            let size = meta.len();
+            let permissions = meta.permissions();
+
+            let entry = FileEntry {
+                name: requested,
+                is_dir,
+                size,
+                modified: modified_time,
+                permissions: Some(permissions.mode() as mode_t),
+            };
+
+            Json(serde_json::to_value(&entry).unwrap())
+        }
+        Err(e) => {
+            error!("Failed to get metadata for {}: {}", full_path, e);
+            Json(json!({ "error": "Failed to get file metadata" }))
+        }
+    }
 }
 
 // basic handler that responds with a static string
