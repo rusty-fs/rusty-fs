@@ -3,7 +3,7 @@ use reqwest::header::{RANGE, CONTENT_LENGTH, LAST_MODIFIED};
 use reqwest::StatusCode;
 use thiserror::Error;
 use async_trait::async_trait;
-
+use tracing::{debug, error, warn};
 use libc::{EACCES, EIO, ENOENT};
 
 #[derive(Debug, Error)]
@@ -44,8 +44,6 @@ impl From<tokio::task::JoinError> for HttpError {
 pub trait HttpBackend: Send + Sync {
     async fn list_directory(&self, path: &str) -> Result<Vec<FileEntry>, HttpError>;
     async fn get_file_metadata(&self, path: &str) -> Result<FileEntry, HttpError>;
-    async fn head(&self, path: &str) -> Result<(u64, Option<String>), HttpError>;
-    async fn read_all(&self, path: &str) -> Result<Vec<u8>, HttpError>;
     async fn read_range(&self, path: &str, offset: u64, length: usize) -> Result<Vec<u8>, HttpError>;
 }
 
@@ -80,7 +78,7 @@ impl HttpBackend for HttpClient {
     /// Returns a Vec<FileEntry>
     async fn list_directory(&self, path: &str) -> Result<Vec<FileEntry>, HttpError> {
         let url = format!("{}/list{}", self.base_url, path);
-        println!("GET {}", url);
+        debug!("Listing directory at URL: {}", url);
          
         let response = self.client.get(&url).send().await;
 
@@ -98,7 +96,6 @@ impl HttpBackend for HttpClient {
                 // Parse the JSON as DirectoryListing and extract the files array
                 let listing: DirectoryListing = serde_json::from_str(&response_text)
                     .map_err(|e| HttpError::Other(format!("JSON parse error: {} - Response: {}", e, response_text).into()))?;
-                println!("Response body: {:?}", listing.files);
   
                 Ok(listing.files)
             }            
@@ -123,48 +120,6 @@ impl HttpBackend for HttpClient {
         let entry: FileEntry = serde_json::from_str(&text)
             .map_err(|e| HttpError::Other(format!("JSON parse error for metadata: {} - Response: {}", e, text).into()))?;
         Ok(entry)
-    }
-
-    /// Retrieve file size and optional last modified time.
-    /// Returns (size in bytes, optional last modified string).
-    /// Server must support HEAD /file{path} returning Content-Length and Last-Modified headers
-    async fn head(&self, path: &str) -> Result<(u64, Option<String>), HttpError> {
-        let url = format!("{}/file{}", self.base_url, path);
-        let resp = self.client.head(&url).send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(HttpError::Other(format!("head failed: {}", status).into()));
-        }
-        let size = resp
-            .headers()
-            .get(CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
-        let lm = resp
-            .headers()
-            .get(LAST_MODIFIED)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-        Ok((size, lm))
-    }
-
-    /// Read the entire file into a Vec<u8>.
-    /// This is not efficient for large files, prefer read_range.
-    /// Calls GET /file{path}
-    /// Example: GET /file/some/file.txt
-    /// Returns a Vec<u8> with the file data
-    /// Server must support full file download.
-    async fn read_all(&self, path: &str) -> Result<Vec<u8>, HttpError> {
-        let url = format!("{}/file{}", self.base_url, path);
-        let resp = self.client.get(&url).send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            return Err(HttpError::Other(format!("read_all failed: {} - {}", status, text).into()));
-        }
-        let bytes = resp.bytes().await?;
-        Ok(bytes.to_vec())
     }
 
     /// Read a byte range of the file. Offset is u64, length is usize.
@@ -198,7 +153,6 @@ mod tests {
     use super::*;
     use httpmock::MockServer;
     use httpmock::Method::GET;
-    use httpmock::Method::HEAD;
     use serde_json::json;
     use tokio;
 
@@ -244,37 +198,6 @@ mod tests {
         let result = client.get_file_metadata("/foo.txt").await.unwrap();
         assert_eq!(result.name, "foo.txt");
         assert!(!result.is_dir);
-    }
-
-    #[tokio::test]
-    async fn test_head_success() {
-        let server = MockServer::start_async().await;
-        let _mock = server.mock_async(|when, then| {
-            when.method(HEAD).path("/file/foo.txt");
-            then.status(200)
-                .header("content-length", "123")
-                .header("last-modified", "Wed, 21 Oct 2015 07:28:00 GMT");
-        }).await;
-
-        let client = make_client(&server.base_url());
-        let (size, lm) = client.head("/foo.txt").await.unwrap();
-        assert_eq!(size, 123);
-        assert!(lm.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_read_all_success() {
-        let server = MockServer::start_async().await;
-        let data = b"hello world";
-        let _mock = server.mock_async(|when, then| {
-            when.method(GET).path("/file/foo.txt");
-            then.status(200)
-                .body(data.as_ref());
-        }).await;
-
-        let client = make_client(&server.base_url());
-        let result = client.read_all("/foo.txt").await.unwrap();
-        assert_eq!(result, data);
     }
 
     #[tokio::test]
