@@ -1,4 +1,5 @@
 use crate::fs::http_client::HttpBackend;
+use crate::fs::http_client::HttpError;
 use crate::fs::types::FileEntry;
 use fuser::{FUSE_ROOT_ID, FileAttr, FileType};
 use fuser::{Filesystem, ReplyAttr, ReplyDirectory, ReplyEntry, Request};
@@ -8,7 +9,6 @@ use std::ffi::OsStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
-use crate::fs::http_client::HttpError;
 use tracing::{debug, error, warn};
 
 const TTL: Duration = Duration::from_secs(1);
@@ -89,42 +89,20 @@ impl RemoteFileSystem {
             flags: 0,
         }
     }
-}
 
-impl Filesystem for RemoteFileSystem {
-    fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        debug!("lookup: parent={}, name={:?}", parent, name);
-
-        let parent_path = match self.get_path_for_inode(parent) {
-            Some(path) => path,
-            None => {
-                error!("lookup failed: parent inode {} not found", parent);
-                reply.error(ENOENT);
-                return;
-            }
-        };
-
-        let name_str = match name.to_str() {
-            Some(s) => s,
-            None => {
-                error!("lookup failed: invalid name {:?}", name);
-                reply.error(ENOENT);
-                return;
-            }
-        };
-
-        // costruisci full_path (per inode) ma chiedi la lista del parent
+    // Testable helper: lookup a name under a parent inode and return (inode, FileAttr)
+    pub fn lookup_path(&mut self, parent: u64, name: &str) -> Result<(u64, FileAttr), HttpError> {
+        let parent_path = self.get_path_for_inode(parent).ok_or(HttpError::NotFound)?;
         let full_path = if parent_path == "/" {
-            format!("/{}", name_str)
+            format!("/{}", name)
         } else {
-            format!("{}/{}", parent_path, name_str)
+            format!("{}/{}", parent_path, name)
         };
 
         let client = self.http_client.clone();
         let parent_clone = parent_path.clone();
-        let name_clone = name_str.to_string();
+        let name_clone = name.to_string();
         let result = self.runtime.block_on(async move {
-            // list_directory sul parent e cerca il nome
             match client.list_directory(&parent_clone).await {
                 Ok(entries) => {
                     if let Some(entry) = entries.into_iter().find(|e| e.name == name_clone) {
@@ -135,12 +113,159 @@ impl Filesystem for RemoteFileSystem {
                 }
                 Err(e) => Err(e),
             }
-        });
+        })?;
 
-        match result {
-            Ok(entry) => {
-                let inode = self.get_inode_for_path(&full_path);
-                let attr = self.file_entry_to_attr(&entry, inode);
+        let inode = self.get_inode_for_path(&full_path);
+        let attr = self.file_entry_to_attr(&result, inode);
+        Ok((inode, attr))
+    }
+
+    // Testable helper: getattr by inode
+    pub fn getattr_path(&mut self, ino: u64) -> Result<FileAttr, HttpError> {
+        let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
+        // root
+        if path == "/" {
+            let entry = FileEntry {
+                name: "".to_string(),
+                is_dir: true,
+                size: 0,
+                modified: Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                ),
+                permissions: None,
+            };
+            return Ok(self.file_entry_to_attr(&entry, ino));
+        }
+
+        let client = self.http_client.clone();
+        let path_clone = path.clone();
+        let res = self.runtime.block_on(async move {
+            // try directory
+            if let Ok(_) = client.list_directory(&path_clone).await {
+                Ok(FileEntry {
+                    name: path_clone.split('/').last().unwrap_or("").to_string(),
+                    is_dir: true,
+                    size: 0,
+                    modified: Some(
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
+                    ),
+                    permissions: None,
+                })
+            } else {
+                // try metadata
+                client.get_file_metadata(&path_clone).await
+            }
+        })?;
+
+        Ok(self.file_entry_to_attr(&res, ino))
+    }
+
+    // Testable helper: readdir returns (inode, FileEntry) vector
+    pub fn readdir_path(&mut self, ino: u64) -> Result<Vec<(u64, FileEntry)>, HttpError> {
+        let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
+        let client = self.http_client.clone();
+        let path_clone = path.clone();
+        let entries = self
+            .runtime
+            .block_on(async move { client.list_directory(&path_clone).await })?;
+        let mut out = Vec::new();
+        for entry in entries.into_iter() {
+            let entry_path = if path == "/" {
+                format!("/{}", entry.name)
+            } else {
+                format!("{}/{}", path, entry.name)
+            };
+            let entry_inode = self.get_inode_for_path(&entry_path);
+            out.push((entry_inode, entry));
+        }
+        Ok(out)
+    }
+
+    pub fn readdir_entries(
+        &mut self,
+        ino: u64,
+        offset: i64,
+    ) -> Result<Vec<(u64, FileType, String)>, HttpError> {
+        // get real entries (inode, FileEntry)
+        let entries = self.readdir_path(ino)?;
+        let mut out: Vec<(u64, FileType, String)> = Vec::new();
+
+        // offset is the fuser offset: 0 means start; this module used current_offset=1.. so adapt
+        // we will build full list then return slice starting from offset
+        // entry 0 -> "."  (dir ino)
+        // entry 1 -> ".." (parent ino)
+        // entry 2.. -> real entries
+
+        // "."
+        out.push((ino, FileType::Directory, ".".to_string()));
+
+        // ".."
+        let path = self.get_path_for_inode(ino).unwrap_or("/".to_string());
+        let parent_path = Self::parent_path(&path);
+        let parent_ino = self.get_inode_for_path(&parent_path);
+        out.push((parent_ino, FileType::Directory, "..".to_string()));
+
+        // real entries
+        for (entry_ino, entry) in entries.into_iter() {
+            let ft = if entry.is_dir {
+                FileType::Directory
+            } else {
+                FileType::RegularFile
+            };
+            out.push((entry_ino, ft, entry.name));
+        }
+
+        // apply offset semantics as in the FUSE callback: the callback used current_offset starting at 1
+        // if caller offset < 1 then start at 1; here we treat offset as number already used previously
+        let start_idx = (offset.max(0)) as usize; // adapt if needed to match previous logic
+        let sliced = if start_idx < out.len() {
+            out[start_idx..].to_vec()
+        } else {
+            Vec::new()
+        };
+        Ok(sliced)
+    }
+
+    // Testable helper: open (validate file exists)
+    pub fn open_path(&mut self, ino: u64) -> Result<(), HttpError> {
+        let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
+        let client = self.http_client.clone();
+        let path_clone = path.clone();
+        self.runtime
+            .block_on(async move { client.get_file_metadata(&path_clone).await })
+            .map(|_| ())
+    }
+
+    // Testable helper: read bytes by inode
+    pub fn read_bytes(&self, ino: u64, offset: u64, size: usize) -> Result<Vec<u8>, HttpError> {
+        let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
+        let client = self.http_client.clone();
+        let path_clone = path.clone();
+        self.runtime
+            .block_on(async move { client.read_range(&path_clone, offset, size).await })
+    }
+}
+
+impl Filesystem for RemoteFileSystem {
+    // Use lookup_path helper
+    fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
+        debug!("lookup: parent={}, name={:?}", parent, name);
+        let name_str = match name.to_str() {
+            Some(s) => s,
+            None => {
+                error!("lookup failed: invalid name {:?}", name);
+                reply.error(ENOENT);
+                return;
+            }
+        };
+        match self.lookup_path(parent, name_str) {
+            Ok((inode, attr)) => {
                 reply.entry(&TTL, &attr, 0);
             }
             Err(e) => {
@@ -150,68 +275,21 @@ impl Filesystem for RemoteFileSystem {
         }
     }
 
+    // Use getattr_path helper
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
         debug!("getattr: ino={}", ino);
-
-        let path = match self.get_path_for_inode(ino) {
-            Some(path) => path,
-            None => {
-                error!("getattr failed: inode {} not found", ino);
-                reply.error(ENOENT);
-                return;
-            }
-        };
-
-        let client = self.http_client.clone();
-        let result = self.runtime.block_on(async move {
-            // Per la root directory
-            if path == "/" {
-                return Ok(FileEntry {
-                    name: "".to_string(),
-                    is_dir: true,
-                    size: 0,
-                    modified: Some(
-                        SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs(),
-                    ),
-                    permissions: None,
-                });
-            }
-
-            // Prova come directory
-            if let Ok(_) = client.list_directory(&path).await {
-                return Ok(FileEntry {
-                    name: path.split('/').last().unwrap_or("").to_string(),
-                    is_dir: true,
-                    size: 0,
-                    modified: Some(
-                        SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs(),
-                    ),
-                    permissions: None,
-                });
-            }
-
-            // Fallback per file (se implementi get_file_metadata)
-            Err(anyhow::anyhow!("Not found"))
-        });
-
-        match result {
-            Ok(entry) => {
-                let attr = self.file_entry_to_attr(&entry, ino);
+        match self.getattr_path(ino) {
+            Ok(attr) => {
                 reply.attr(&TTL, &attr);
             }
-            Err(_) => {
-                error!("getattr failed: path not found");
-                reply.error(ENOENT);
+            Err(e) => {
+                error!("getattr failed: {}", e);
+                reply.error(e.to_errno());
             }
         }
     }
 
+    // Use readdir_path helper
     fn readdir(
         &mut self,
         _req: &Request,
@@ -220,66 +298,15 @@ impl Filesystem for RemoteFileSystem {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        debug!("readdir: ino={}, offset={}", ino, offset);
-
-        let path = match self.get_path_for_inode(ino) {
-            Some(path) => path,
-            None => {
-                error!("readdir failed: inode {} not found", ino);
-                reply.error(ENOENT);
-                return;
-            }
-        };
-
-        let path_clone = path.clone();
-        let client = self.http_client.clone();
-        let result = self
-            .runtime
-            .block_on(async move { client.list_directory(&path_clone).await });
-
-        match result {
-            Ok(entries) => {
-                let mut current_offset = 1i64;
-
-                // "."
-                if offset < current_offset {
-                    if reply.add(ino, current_offset, FileType::Directory, ".") {
+        match self.readdir_entries(ino, offset) {
+            Ok(items) => {
+                for (i, (entry_ino, file_type, name)) in items.into_iter().enumerate() {
+                    // compute an offset value for reply.add — keep same semantics as before
+                    let entry_offset = offset + (i as i64) + 1; // tune to match previous current_offset
+                    if reply.add(entry_ino, entry_offset, file_type, name) {
                         reply.ok();
                         return;
                     }
-                }
-                current_offset += 1;
-
-                // ".." -> calcola parent path reale
-                if offset < current_offset {
-                    let parent_path = Self::parent_path(&path);
-                    let parent_ino = self.get_inode_for_path(&parent_path);
-                    if reply.add(parent_ino, current_offset, FileType::Directory, "..") {
-                        reply.ok();
-                        return;
-                    }
-                }
-                current_offset += 1;
-
-                // entries reali
-                for entry in entries.iter().skip((offset - 2).max(0) as usize) {
-                    let entry_path = if path == "/" {
-                        format!("/{}", entry.name)
-                    } else {
-                        format!("{}/{}", path, entry.name)
-                    };
-
-                    let entry_inode = self.get_inode_for_path(&entry_path);
-                    let file_type = if entry.is_dir {
-                        FileType::Directory
-                    } else {
-                        FileType::RegularFile
-                    };
-
-                    if reply.add(entry_inode, current_offset, file_type, &entry.name) {
-                        break;
-                    }
-                    current_offset += 1;
                 }
                 reply.ok();
             }
@@ -290,10 +317,22 @@ impl Filesystem for RemoteFileSystem {
         }
     }
 
-    fn open(&mut self, _req: &Request<'_>, _ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
-        todo!("Implement open if needed");
+    // Use open_path helper
+    fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
+        debug!("open called for ino {}", ino);
+        match self.open_path(ino) {
+            Ok(_) => {
+                let fh = 0; // file handle, not used here
+                reply.opened(fh, 0);
+            }
+            Err(e) => {
+                error!("open failed: {}", e);
+                reply.error(e.to_errno());
+            }
+        }
     }
 
+    // Use read_bytes helper
     fn read(
         &mut self,
         _req: &Request<'_>,
@@ -305,7 +344,19 @@ impl Filesystem for RemoteFileSystem {
         lock_owner: Option<u64>,
         reply: fuser::ReplyData,
     ) {
-        todo!("Implement read if needed");
+        debug!(
+            "read called for ino {}, fh {}, offset {}, size {}",
+            ino, fh, offset, size
+        );
+        match self.read_bytes(ino, offset as u64, size as usize) {
+            Ok(data) => {
+                reply.data(&data);
+            }
+            Err(e) => {
+                error!("read failed: {}", e);
+                reply.error(e.to_errno());
+            }
+        }
     }
 }
 
@@ -322,30 +373,31 @@ mod tests {
     #[derive(Clone)]
     struct FakeBackend {
         listing: HashMap<String, Vec<FileEntry>>,
+        metadata: HashMap<String, FileEntry>,
+        contents: HashMap<String, Vec<u8>>,
     }
 
     impl FakeBackend {
         fn new() -> Self {
             let mut listing = HashMap::new();
-            listing.insert(
-                "/".to_string(),
-                vec![
-                    FileEntry {
-                        name: "f.txt".to_string(),
-                        is_dir: false,
-                        size: 10,
-                        modified: Some(1),
-                        permissions: Some(0o644 as mode_t),
-                    },
-                    FileEntry {
-                        name: "dir".to_string(),
-                        is_dir: true,
-                        size: 0,
-                        modified: Some(2),
-                        permissions: Some(0o755 as mode_t),
-                    },
-                ],
-            );
+            let root_children = vec![
+                FileEntry {
+                    name: "f.txt".to_string(),
+                    is_dir: false,
+                    size: 10,
+                    modified: Some(1),
+                    permissions: Some(0o644 as mode_t),
+                },
+                FileEntry {
+                    name: "dir".to_string(),
+                    is_dir: true,
+                    size: 0,
+                    modified: Some(2),
+                    permissions: Some(0o755 as mode_t),
+                },
+            ];
+            listing.insert("/".to_string(), root_children.clone());
+
             listing.insert(
                 "/dir".to_string(),
                 vec![FileEntry {
@@ -356,7 +408,50 @@ mod tests {
                     permissions: Some(0o600 as mode_t),
                 }],
             );
-            Self { listing }
+
+            // metadata map for direct lookup
+            let mut metadata = HashMap::new();
+            metadata.insert(
+                "/f.txt".to_string(),
+                FileEntry {
+                    name: "f.txt".to_string(),
+                    is_dir: false,
+                    size: 10,
+                    modified: Some(1),
+                    permissions: Some(0o644 as mode_t),
+                },
+            );
+            metadata.insert(
+                "/dir".to_string(),
+                FileEntry {
+                    name: "dir".to_string(),
+                    is_dir: true,
+                    size: 0,
+                    modified: Some(2),
+                    permissions: Some(0o755 as mode_t),
+                },
+            );
+            metadata.insert(
+                "/dir/inner.txt".to_string(),
+                FileEntry {
+                    name: "inner.txt".to_string(),
+                    is_dir: false,
+                    size: 5,
+                    modified: Some(3),
+                    permissions: Some(0o600 as mode_t),
+                },
+            );
+
+            // contents map for read_range
+            let mut contents = HashMap::new();
+            contents.insert("/f.txt".to_string(), b"0123456789".to_vec()); // 10 bytes
+            contents.insert("/dir/inner.txt".to_string(), b"abcde".to_vec()); // 5 bytes
+
+            Self {
+                listing,
+                metadata,
+                contents,
+            }
         }
     }
 
@@ -370,25 +465,30 @@ mod tests {
             }
         }
 
-        async fn get_file_metadata(&self, _path: &str) -> Result<FileEntry, HttpError> {
-            Err(HttpError::Other(("not implemented").into()))
-        }
-
-        async fn head(&self, _path: &str) -> Result<(u64, Option<String>), HttpError> {
-            Err(HttpError::Other(("not implemented").into()))
-        }
-
-        async fn read_all(&self, _path: &str) -> Result<Vec<u8>, HttpError> {
-            Err(HttpError::Other(("not implemented").into()))
+        async fn get_file_metadata(&self, path: &str) -> Result<FileEntry, HttpError> {
+            if let Some(entry) = self.metadata.get(path) {
+                Ok(entry.clone())
+            } else {
+                Err(HttpError::NotFound)
+            }
         }
 
         async fn read_range(
             &self,
-            _path: &str,
-            _offset: u64,
-            _length: usize,
+            path: &str,
+            offset: u64,
+            length: usize,
         ) -> Result<Vec<u8>, HttpError> {
-            Err(HttpError::Other(("not implemented").into()))
+            if let Some(data) = self.contents.get(path) {
+                let off = offset as usize;
+                if off >= data.len() {
+                    return Ok(vec![]);
+                }
+                let end = std::cmp::min(off + length, data.len());
+                Ok(data[off..end].to_vec())
+            } else {
+                Err(HttpError::NotFound)
+            }
         }
     }
 
@@ -448,4 +548,123 @@ mod tests {
         // blocks calculation: (size + 511) / 512
         assert_eq!(attr.blocks, (1234 + 511) / 512);
     }
+
+    #[test]
+    fn test_readdir_and_inode_mapping() {
+        let backend = Arc::new(FakeBackend::new());
+        let mut fs = RemoteFileSystem::new(backend.clone());
+
+        // root readdir
+        let entries = fs
+            .readdir_path(FUSE_ROOT_ID)
+            .expect("readdir should succeed");
+        assert_eq!(entries.len(), 2);
+        let names: Vec<String> = entries.iter().map(|(_, e)| e.name.clone()).collect();
+        assert!(names.contains(&"f.txt".to_string()));
+        assert!(names.contains(&"dir".to_string()));
+    }
+
+    #[test]
+    fn test_open_and_read_flow() {
+        let backend = Arc::new(FakeBackend::new());
+        let mut fs = RemoteFileSystem::new(backend.clone());
+
+        // open existing file
+        let ino = fs.get_inode_for_path("/f.txt");
+        assert!(fs.open_path(ino).is_ok());
+        // open non-existing file
+        let fake_ino = fs.get_inode_for_path("/nonexistent.txt");
+        assert!(matches!(fs.open_path(fake_ino), Err(HttpError::NotFound)));
+        // read existing file
+        let data = fs.read_bytes(ino, 0, 10).expect("read should succeed");
+        assert_eq!(data, b"0123456789".to_vec());
+        // read with offset and length
+        let part = fs.read_bytes(ino, 2, 5).expect("read should succeed");
+        assert_eq!(part, b"23456".to_vec());
+        // read beyond EOF
+        let beyond = fs.read_bytes(ino, 15, 5).expect("read should succeed");
+        assert_eq!(beyond.len(), 0);
+        // read non-existing file
+        assert!(matches!(
+            fs.read_bytes(fake_ino, 0, 10),
+            Err(HttpError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn test_readdir_entries_offsets() {
+        let backend = Arc::new(FakeBackend::new());
+        let mut fs = RemoteFileSystem::new(backend.clone());
+
+        let ino = FUSE_ROOT_ID;
+        // offset 0: should return all entries
+        let all = fs.readdir_entries(ino, 0).expect("readdir_entries should succeed");
+        assert_eq!(all.len(), 4); // ., .., f.txt, dir
+
+        // offset 1: should skip "."
+        let skip_dot = fs.readdir_entries(ino, 1).expect("readdir_entries should succeed");
+        assert_eq!(skip_dot.len(), 3); // .., f.txt, dir
+
+        // offset 2: should skip ".", ".."
+        let skip_dot_dot = fs.readdir_entries(ino, 2).expect("readdir_entries should succeed");
+        assert_eq!(skip_dot_dot.len(), 2); // f.txt, dir
+
+        // offset beyond: should return empty
+        let beyond = fs.readdir_entries(ino, 10).expect("readdir_entries should succeed");
+        assert_eq!(beyond.len(), 0);
+    }
+
+    #[test]
+    fn test_lookup() {
+        let backend = Arc::new(FakeBackend::new());
+        let mut fs = RemoteFileSystem::new(backend.clone());
+
+        // lookup existing file
+        let (ino, attr) = fs.lookup_path(FUSE_ROOT_ID, "f.txt").expect("lookup should succeed");
+        assert_eq!(attr.kind, FileType::RegularFile);
+        assert_eq!(attr.size, 10);
+        assert_eq!(fs.get_path_for_inode(ino).unwrap(), "/f.txt");
+
+        // lookup existing directory
+        let (d_ino, d_attr) = fs.lookup_path(FUSE_ROOT_ID, "dir").expect("lookup should succeed");
+        assert_eq!(d_attr.kind, FileType::Directory);
+        assert_eq!(fs.get_path_for_inode(d_ino).unwrap(), "/dir");
+
+        // lookup non-existing entry
+        assert!(matches!(
+            fs.lookup_path(FUSE_ROOT_ID, "nonexistent"),
+            Err(HttpError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn test_getattr() {
+        let backend = Arc::new(FakeBackend::new());
+        let mut fs = RemoteFileSystem::new(backend.clone());
+
+        // getattr root
+        let root_attr = fs.getattr_path(FUSE_ROOT_ID).expect("getattr should succeed");
+        assert_eq!(root_attr.kind, FileType::Directory);
+
+        // getattr existing file
+        let f_ino = fs.get_inode_for_path("/f.txt");
+        let f_attr = fs.getattr_path(f_ino).expect("getattr should succeed");
+        assert_eq!(f_attr.kind, FileType::RegularFile);
+        assert_eq!(f_attr.size, 10);
+
+        // getattr existing directory
+        let d_ino = fs.get_inode_for_path("/dir");
+        let d_attr = fs.getattr_path(d_ino).expect("getattr should succeed");
+        assert_eq!(d_attr.kind, FileType::Directory);
+
+        // getattr non-existing inode
+        let fake_ino = 9999;
+        assert!(matches!(
+            fs.getattr_path(fake_ino),
+            Err(HttpError::NotFound)
+        ));
+    }
+
+
+
 }
