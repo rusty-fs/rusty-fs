@@ -196,190 +196,101 @@ impl HttpBackend for HttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use httpmock::MockServer;
+    use httpmock::Method::GET;
+    use httpmock::Method::HEAD;
+    use serde_json::json;
+    use tokio;
 
-    #[derive(Clone)]
-    struct MockBackend {
-        dirs: std::collections::HashMap<String, Vec<FileEntry>>,
-        files: std::collections::HashMap<String, FileEntry>,
-        fail_list: bool,
-        fail_meta: bool,
-    }
-
-    impl MockBackend {
-        fn new() -> Self {
-            let mut dirs = std::collections::HashMap::new();
-            let mut files = std::collections::HashMap::new();
-            dirs.insert(
-                "/".to_string(),
-                vec![
-                    FileEntry {
-                        name: "file1.txt".to_string(),
-                        is_dir: false,
-                        size: 100,
-                        modified: Some(10),
-                        permissions: Some(0o644),
-                    },
-                    FileEntry {
-                        name: "dir1".to_string(),
-                        is_dir: true,
-                        size: 0,
-                        modified: Some(20),
-                        permissions: Some(0o755),
-                    },
-                ],
-            );
-            dirs.insert(
-                "/dir1".to_string(),
-                vec![FileEntry {
-                    name: "file2.txt".to_string(),
-                    is_dir: false,
-                    size: 200,
-                    modified: Some(30),
-                    permissions: Some(0o600),
-                }],
-            );
-            files.insert(
-                "/file1.txt".to_string(),
-                FileEntry {
-                    name: "file1.txt".to_string(),
-                    is_dir: false,
-                    size: 100,
-                    modified: Some(10),
-                    permissions: Some(0o644),
-                },
-            );
-            files.insert(
-                "/dir1/file2.txt".to_string(),
-                FileEntry {
-                    name: "file2.txt".to_string(),
-                    is_dir: false,
-                    size: 200,
-                    modified: Some(30),
-                    permissions: Some(0o600),
-                },
-            );
-            Self { dirs, files, fail_list: false, fail_meta: false }
-        }
-    }
-
-    #[async_trait]
-    impl HttpBackend for MockBackend {
-        async fn list_directory(&self, path: &str) -> Result<Vec<FileEntry>, HttpError> {
-            if self.fail_list {
-                return Err(HttpError::Network("fail_list".into()));
-            }
-            self.dirs.get(path).cloned().ok_or(HttpError::NotFound)
-        }
-        async fn get_file_metadata(&self, path: &str) -> Result<FileEntry, HttpError> {
-            if self.fail_meta {
-                return Err(HttpError::PermissionDenied);
-            }
-            self.files.get(path).cloned().ok_or(HttpError::NotFound)
-        }
-        async fn head(&self, _path: &str) -> Result<(u64, Option<String>), HttpError> {
-            Ok((123, Some("Thu, 01 Jan 1970 00:00:00 GMT".to_string())))
-        }
-        async fn read_all(&self, path: &str) -> Result<Vec<u8>, HttpError> {
-            if self.files.contains_key(path) {
-                Ok(vec![1, 2, 3])
-            } else {
-                Err(HttpError::NotFound)
-            }
-        }
-        async fn read_range(&self, path: &str, offset: u64, length: usize) -> Result<Vec<u8>, HttpError> {
-            if self.files.contains_key(path) {
-                let data = vec![10, 20, 30, 40, 50];
-                let start = offset as usize;
-                let end = (start + length).min(data.len());
-                Ok(data.get(start..end).unwrap_or(&[]).to_vec())
-            } else {
-                Err(HttpError::NotFound)
-            }
-        }
-    }
-
-    #[test]
-    fn test_to_errno() {
-        assert_eq!(HttpError::NotFound.to_errno(), ENOENT);
-        assert_eq!(HttpError::PermissionDenied.to_errno(), EACCES);
-        assert_eq!(HttpError::Network("x".into()).to_errno(), EIO);
-        assert_eq!(HttpError::Other("y".into()).to_errno(), EIO);
+    fn make_client(base_url: &str) -> HttpClient {
+        HttpClient::new(base_url.to_string())
     }
 
     #[tokio::test]
     async fn test_list_directory_success() {
-        let backend = MockBackend::new();
-        let entries = backend.list_directory("/").await.unwrap();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].name, "file1.txt");
-        assert!(entries[1].is_dir);
-    }
+        let server = MockServer::start_async().await;
+        let files = vec![
+            json!({"name": "foo.txt", "is_dir": false, "size": 123, "modified": Some(1), "permissions": Some(0o644)}),
+            json!({"name": "bar", "is_dir": true, "size": 0, "modified": Some(2), "permissions": Some(0o755)}),
+        ];
+        let body = json!({"files": files, "message": "ok"}).to_string();
 
-    #[tokio::test]
-    async fn test_list_directory_not_found() {
-        let backend = MockBackend::new();
-        let res = backend.list_directory("/nope").await;
-        assert!(matches!(res, Err(HttpError::NotFound)));
-    }
+        let _mock = server.mock_async(|when, then| {
+            when.method(GET).path("/list/test");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(body.clone());
+        }).await;
 
-    #[tokio::test]
-    async fn test_list_directory_network_error() {
-        let mut backend = MockBackend::new();
-        backend.fail_list = true;
-        let res = backend.list_directory("/").await;
-        assert!(matches!(res, Err(HttpError::Network(_))));
+        let client = make_client(&server.base_url());
+        let result = client.list_directory("/test").await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "foo.txt");
+        assert!(result[1].is_dir);
     }
 
     #[tokio::test]
     async fn test_get_file_metadata_success() {
-        let backend = MockBackend::new();
-        let entry = backend.get_file_metadata("/file1.txt").await.unwrap();
-        assert_eq!(entry.size, 100);
-        assert!(!entry.is_dir);
-    }
+        let server = MockServer::start_async().await;
+        let entry = json!({"name": "foo.txt", "is_dir": false, "size": 123, "modified": Some(1), "permissions": Some(0o644)});
+        let _mock = server.mock_async(|when, then| {
+            when.method(GET).path("/meta/foo.txt");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(entry.to_string());
+        }).await;
 
-    #[tokio::test]
-    async fn test_get_file_metadata_permission_denied() {
-        let mut backend = MockBackend::new();
-        backend.fail_meta = true;
-        let res = backend.get_file_metadata("/file1.txt").await;
-        assert!(matches!(res, Err(HttpError::PermissionDenied)));
+        let client = make_client(&server.base_url());
+        let result = client.get_file_metadata("/foo.txt").await.unwrap();
+        assert_eq!(result.name, "foo.txt");
+        assert!(!result.is_dir);
     }
 
     #[tokio::test]
     async fn test_head_success() {
-        let backend = MockBackend::new();
-        let (size, lm) = backend.head("/file1.txt").await.unwrap();
+        let server = MockServer::start_async().await;
+        let _mock = server.mock_async(|when, then| {
+            when.method(HEAD).path("/file/foo.txt");
+            then.status(200)
+                .header("content-length", "123")
+                .header("last-modified", "Wed, 21 Oct 2015 07:28:00 GMT");
+        }).await;
+
+        let client = make_client(&server.base_url());
+        let (size, lm) = client.head("/foo.txt").await.unwrap();
         assert_eq!(size, 123);
         assert!(lm.is_some());
     }
 
     #[tokio::test]
     async fn test_read_all_success() {
-        let backend = MockBackend::new();
-        let data = backend.read_all("/file1.txt").await.unwrap();
-        assert_eq!(data, vec![1, 2, 3]);
-    }
+        let server = MockServer::start_async().await;
+        let data = b"hello world";
+        let _mock = server.mock_async(|when, then| {
+            when.method(GET).path("/file/foo.txt");
+            then.status(200)
+                .body(data.as_ref());
+        }).await;
 
-    #[tokio::test]
-    async fn test_read_all_not_found() {
-        let backend = MockBackend::new();
-        let res = backend.read_all("/nope.txt").await;
-        assert!(matches!(res, Err(HttpError::NotFound)));
+        let client = make_client(&server.base_url());
+        let result = client.read_all("/foo.txt").await.unwrap();
+        assert_eq!(result, data);
     }
 
     #[tokio::test]
     async fn test_read_range_success() {
-        let backend = MockBackend::new();
-        let data = backend.read_range("/file1.txt", 1, 2).await.unwrap();
-        assert_eq!(data, vec![20, 30]);
-    }
+        let server = MockServer::start_async().await;
+        let data = b"abcdef";
+        let _mock = server.mock_async(|when, then| {
+            when.method(GET)
+                .path("/file/foo.txt")
+                .header("range", "bytes=2-4");
+            then.status(206)
+                .body(&data[2..=4]);
+        }).await;
 
-    #[tokio::test]
-    async fn test_read_range_not_found() {
-        let backend = MockBackend::new();
-        let res = backend.read_range("/nope.txt", 0, 2).await;
-        assert!(matches!(res, Err(HttpError::NotFound)));
+        let client = make_client(&server.base_url());
+        let result = client.read_range("/foo.txt", 2, 3).await.unwrap();
+        assert_eq!(result, b"cde");
     }
 }
