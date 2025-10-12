@@ -2,6 +2,7 @@ mod fs;
 
 use fs::RemoteFileSystem;
 use fs::HttpClient;
+use std::sync::Arc;
 
 use fuser::MountOption;
 
@@ -17,7 +18,8 @@ fn main() -> anyhow::Result<()> {
 
     println!("Mounting remote filesystem from {} to {}", server_url, mountpoint);
 
-    let fs = RemoteFileSystem::new(HttpClient::new(server_url.to_string()));
+    let http_client =  Arc::new(HttpClient::new(server_url.to_string()));
+    let fs = RemoteFileSystem::new(http_client.clone());
     
     let options = vec![
         MountOption::RO,               // Read-only
