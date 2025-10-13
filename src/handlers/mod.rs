@@ -158,10 +158,76 @@ pub async fn read(
     }
 }
 
-async fn delete_file() -> StatusCode {
-    // logic to delete a file
-    // StatusCode::NO_CONTENT
-    todo!()
+pub async fn mkdir(
+    file_path: Path<String>,
+    Extension(base_dir): Extension<Arc<String>>,
+) -> Result<StatusCode, StatusCode> {
+    let requested_raw = file_path.0;
+    if requested_raw.contains("..") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let requested = requested_raw.trim_start_matches('/').to_string();
+    let full_path = if requested.is_empty() {
+        PathBuf::from(base_dir.trim_end_matches('/'))
+    } else {
+        PathBuf::from(base_dir.trim_end_matches('/')).join(&requested)
+    };
+
+    info!("Creating directory: {} -> {:?}", requested, full_path);
+
+    match fs::create_dir_all(&full_path) {
+        Ok(_) => Ok(StatusCode::CREATED),
+        Err(e) => {
+            error!("Failed to create directory {:?}: {}", full_path, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+pub async fn delete_path(
+    file_path: Path<String>,
+    Extension(base_dir): Extension<Arc<String>>,
+) -> Result<StatusCode, StatusCode> {
+    let requested_raw = file_path.0;
+    if requested_raw.contains("..") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let requested = requested_raw.trim_start_matches('/').to_string();
+    let full_path = if requested.is_empty() {
+        PathBuf::from(base_dir.trim_end_matches('/'))
+    } else {
+        PathBuf::from(base_dir.trim_end_matches('/')).join(&requested)
+    };
+
+    info!("Deleting path: {} -> {:?}", requested, full_path);
+
+    match fs::metadata(&full_path) {
+        Ok(meta) => {
+            if meta.is_dir() {
+                match fs::remove_dir_all(&full_path) {
+                    Ok(_) => Ok(StatusCode::NO_CONTENT),
+                    Err(e) => {
+                        error!("Failed to delete directory {:?}: {}", full_path, e);
+                        Err(StatusCode::INTERNAL_SERVER_ERROR)
+                    }
+                }
+            } else {
+                match fs::remove_file(&full_path) {
+                    Ok(_) => Ok(StatusCode::NO_CONTENT),
+                    Err(e) => {
+                        error!("Failed to delete file {:?}: {}", full_path, e);
+                        Err(StatusCode::INTERNAL_SERVER_ERROR)
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to get metadata for {:?}: {}", full_path, e);
+            Err(StatusCode::NOT_FOUND)
+        }
+    }
 }
 
 async fn create_file() -> StatusCode {
