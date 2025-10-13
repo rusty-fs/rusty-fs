@@ -143,23 +143,28 @@ impl RemoteFileSystem {
         let client = self.http_client.clone();
         let path_clone = path.clone();
         let res = self.runtime.block_on(async move {
-            // try directory
-            if let Ok(_) = client.list_directory(&path_clone).await {
-                Ok(FileEntry {
-                    name: path_clone.split('/').last().unwrap_or("").to_string(),
-                    is_dir: true,
-                    size: 0,
-                    modified: Some(
-                        SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs(),
-                    ),
-                    permissions: None,
-                })
-            } else {
-                // try metadata
-                client.get_file_metadata(&path_clone).await
+            // try metadata first to avoid calling /list on regular files
+            match client.get_file_metadata(&path_clone).await {
+                Ok(meta) => Ok(meta),
+                Err(_) => {
+                    // fallback: try directory
+                    if let Ok(_) = client.list_directory(&path_clone).await {
+                        Ok(FileEntry {
+                            name: path_clone.split('/').last().unwrap_or("").to_string(),
+                            is_dir: true,
+                            size: 0,
+                            modified: Some(
+                                SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs(),
+                            ),
+                            permissions: None,
+                        })
+                    } else {
+                        Err(HttpError::NotFound)
+                    }
+                }
             }
         })?;
 
@@ -358,6 +363,154 @@ impl Filesystem for RemoteFileSystem {
             }
         }
     }
+
+    // Use create_directory helper
+    fn mkdir(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+        reply: fuser::ReplyEntry,
+    ) {
+        debug!("mkdir called for parent {}, name {:?}", parent, name);
+        let name_str = match name.to_str() {
+            Some(s) => s,
+            None => {
+                error!("mkdir failed: invalid name {:?}", name);
+                reply.error(ENOENT);
+                return;
+            }
+        };
+        let parent_path = match self.get_path_for_inode(parent) {
+            Some(p) => p,
+            None => {
+                error!("mkdir failed: parent inode {} not found", parent);
+                reply.error(ENOENT);
+                return;
+            }
+        };
+        let full_path = if parent_path == "/" {
+            format!("/{}", name_str)
+        } else {
+            format!("{}/{}", parent_path, name_str)
+        };
+
+        let client = self.http_client.clone();
+        let path_clone = full_path.clone();
+        let result = self.runtime.block_on(async move {
+            client.create_directory(&path_clone).await
+        });
+
+        match result {
+            Ok(_) => {
+                // After creation, get attributes
+                let inode = self.get_inode_for_path(&full_path);
+                match self.getattr_path(inode) {
+                    Ok(attr) => {
+                        reply.entry(&TTL, &attr, 0);
+                    }
+                    Err(e) => {
+                        error!("mkdir succeeded but getattr failed: {}", e);
+                        reply.error(e.to_errno());
+                    }
+                }
+            }
+            Err(e) => {
+                error!("mkdir failed: {}", e);
+                reply.error(e.to_errno());
+            }
+        }
+    }
+
+    fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+        debug!("rmdir called for parent {}, name {:?}", parent, name);
+        let name_str = match name.to_str() {
+            Some(s) => s,
+            None => {
+                error!("rmdir failed: invalid name {:?}", name);
+                reply.error(ENOENT);
+                return;
+            }
+        };
+        let parent_path = match self.get_path_for_inode(parent) {
+            Some(p) => p,
+            None => {
+                error!("rmdir failed: parent inode {} not found", parent);
+                reply.error(ENOENT);
+                return;
+            }
+        };
+        let full_path = if parent_path == "/" {
+            format!("/{}", name_str)
+        } else {
+            format!("{}/{}", parent_path, name_str)
+        };
+
+        let client = self.http_client.clone();
+        let path_clone = full_path.clone();
+        let result = self.runtime.block_on(async move { client.delete_path(&path_clone).await });
+
+        match result {
+            Ok(_) => {
+                // Optionally remove from inode/path maps
+                if let Some(ino) = self.path_to_inode.remove(&full_path) {
+                    self.inode_to_path.remove(&ino);
+                }
+                reply.ok();
+            }
+            Err(e) => {
+                error!("rmdir failed: {}", e);
+                reply.error(e.to_errno());
+            }
+        }
+    }
+
+    fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+        debug!("unlink called for parent {}, name {:?}", parent, name);
+        let name_str = match name.to_str() {
+            Some(s) => s,
+            None => {
+                error!("unlink failed: invalid name {:?}", name);
+                reply.error(ENOENT);
+                return;
+            }
+        };
+        let parent_path = match self.get_path_for_inode(parent) {
+            Some(p) => p,
+            None => {
+                error!("unlink failed: parent inode {} not found", parent);
+                reply.error(ENOENT);
+                return;
+            }
+        };
+        let full_path = if parent_path == "/" {
+            format!("/{}", name_str)
+        } else {
+            format!("{}/{}", parent_path, name_str)
+        };
+
+        let client = self.http_client.clone();
+        let path_clone = full_path.clone();
+        let result = self.runtime.block_on(async move { client.delete_path(&path_clone).await });
+
+        match result {
+            Ok(_) => {
+                // Optionally remove from inode/path maps
+                if let Some(ino) = self.path_to_inode.remove(&full_path) {
+                    self.inode_to_path.remove(&ino);
+                }
+                reply.ok();
+            }
+            Err(e) => {
+                error!("unlink failed: {}", e);
+                reply.error(e.to_errno());
+            }
+        }
+    }
+
+
 }
 
 #[cfg(test)]
@@ -489,6 +642,15 @@ mod tests {
             } else {
                 Err(HttpError::NotFound)
             }
+        }
+
+        async fn create_directory(&self, path: &str) -> Result<(), HttpError> {
+            // For testing, just succeed if parent exists
+            todo!();
+        }
+
+        async fn delete_path(&self, path: &str) -> Result<(), HttpError> {
+            todo!();
         }
     }
 

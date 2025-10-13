@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
     let fs = RemoteFileSystem::new(http_client.clone());
     
     let options = vec![
-        MountOption::RO,               // Read-only
+        MountOption::RW,               // Read-write
         MountOption::FSName("remote-fs".to_string()),
     ];
 

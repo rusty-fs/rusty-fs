@@ -45,6 +45,8 @@ pub trait HttpBackend: Send + Sync {
     async fn list_directory(&self, path: &str) -> Result<Vec<FileEntry>, HttpError>;
     async fn get_file_metadata(&self, path: &str) -> Result<FileEntry, HttpError>;
     async fn read_range(&self, path: &str, offset: u64, length: usize) -> Result<Vec<u8>, HttpError>;
+    async fn create_directory(&self, path: &str) -> Result<(), HttpError>;
+    async fn delete_path(&self, path: &str) -> Result<(), HttpError>;
 }
 
 #[derive(Clone)]
@@ -128,7 +130,7 @@ impl HttpBackend for HttpClient {
     /// Example: Range: bytes=0-1023 to read first 1024 bytes
     /// Server must support Range requests.
     async fn read_range(&self, path: &str, offset: u64, length: usize) -> Result<Vec<u8>, HttpError> {
-        let url = format!("{}/file{}", self.base_url, path);
+        let url = format!("{}/files{}", self.base_url, path);
         // Range: bytes=START-END (END inclusive)
         let end = offset.saturating_add(length as u64).saturating_sub(1);
         let range_header = format!("bytes={}-{}", offset, end);
@@ -145,6 +147,29 @@ impl HttpBackend for HttpClient {
         }
         let bytes = resp.bytes().await?;
         Ok(bytes.to_vec())
+    }
+
+    async fn create_directory(&self, path: &str) -> Result<(), HttpError> {
+        let url = format!("{}/mkdir{}", self.base_url, path);
+        let resp = self.client.post(&url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(HttpError::Other(format!("create_directory failed: {} - {}", status, text).into()));
+        }
+        Ok(())
+    }
+
+    async fn delete_path(&self, path: &str) -> Result<(), HttpError> {
+        println!("Deleting path: {}", path);
+        let url = format!("{}/files{}", self.base_url, path);
+        let resp = self.client.delete(&url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(HttpError::Other(format!("delete_path failed: {} - {}", status, text).into()));
+        }
+        Ok(())
     }
 }
 
