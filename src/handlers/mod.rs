@@ -131,13 +131,32 @@ pub async fn meta(
     }
 }
 
-// basic handler that responds with a static string
-// #[axum::debug_handler]
-// async fn get_file() -> Json<serde_json::Value> {
-//     // logic to get a file
-//     info!("Getting file");
+pub async fn read(
+    file_path: Path<String>,
+    Extension(base_dir): Extension<Arc<String>>,
+) -> Result<(StatusCode, Vec<u8>), StatusCode> {
+    let requested_raw = file_path.0;
+    if requested_raw.contains("..") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
 
-// }
+    let requested = requested_raw.trim_start_matches('/').to_string();
+    let full_path = if requested.is_empty() {
+        PathBuf::from(base_dir.trim_end_matches('/'))
+    } else {
+        PathBuf::from(base_dir.trim_end_matches('/')).join(&requested)
+    };
+
+    info!("Reading file: {} -> {:?}", requested, full_path);
+
+    match fs::read(&full_path) {
+        Ok(content) => Ok((StatusCode::OK, content)),
+        Err(e) => {
+            error!("Failed to read file {:?}: {}", full_path, e);
+            Err(StatusCode::NOT_FOUND)
+        }
+    }
+}
 
 async fn delete_file() -> StatusCode {
     // logic to delete a file
