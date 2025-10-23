@@ -7,8 +7,17 @@ use std::sync::Arc;
 use fuser::MountOption;
 
 use tracing::{debug, error, warn, info};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::filter::EnvFilter;
 
 fn main() -> anyhow::Result<()> { 
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::from_default_env())
+        .init();
+
+    info!("Starting mounty...");
+
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 3 {
         info!("Usage: {} <server_url> <mountpoint>", args[0]);
@@ -25,6 +34,7 @@ fn main() -> anyhow::Result<()> {
     
     let options = vec![
         MountOption::RW,               // Read-write
+        MountOption::AllowOther, 
         MountOption::FSName("remote-fs".to_string()),
     ];
 
