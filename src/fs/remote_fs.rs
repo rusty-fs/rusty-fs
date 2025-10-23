@@ -4,6 +4,7 @@ use crate::fs::types::FileEntry;
 use fuser::{FUSE_ROOT_ID, FileAttr, FileType};
 use fuser::{Filesystem, ReplyAttr, ReplyDirectory, ReplyEntry, Request};
 use libc::{EIO, ENOENT};
+use tracing::info;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::sync::Arc;
@@ -82,8 +83,8 @@ impl RemoteFileSystem {
             },
             perm,
             nlink: 1,
-            uid: 1000,
-            gid: 1000,
+            uid: unsafe { libc::getuid() } as u32,
+            gid: unsafe { libc::getgid() } as u32,
             rdev: 0,
             blksize: 512,
             flags: 0,
