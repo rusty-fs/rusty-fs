@@ -19,7 +19,7 @@ cargo run <server_url> <mountpoint>
 
 ```bash
 # Mount remote filesystem from server to local directory
-cargo run http://example.com:8080 /mnt/remote
+cargo run http://localhost:3000 /mnt/remote
 
 # Unmount (from another terminal)
 fusermount -u /mnt/remote

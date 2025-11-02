@@ -5,6 +5,7 @@ use fuser::{FUSE_ROOT_ID, FileAttr, FileType};
 use fuser::{Filesystem, ReplyAttr, ReplyDirectory, ReplyEntry, Request};
 use libc::{EIO, ENOENT};
 use tracing::info;
+use libc::{O_APPEND, O_EXCL, O_TRUNC};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::sync::Arc;
@@ -14,12 +15,47 @@ use tracing::{debug, error, warn};
 
 const TTL: Duration = Duration::from_secs(1);
 
+struct FhState {
+    buf: Vec<u8>,
+    append: bool,
+}
+
+struct FhManager {
+    next_fh: u64,
+    fh_map: HashMap<u64, FhState>,
+}
+
+impl FhManager {
+    fn new() -> Self {
+        Self {
+            next_fh: 1,
+            fh_map: HashMap::new(),
+        }
+    }
+
+    fn alloc_fh(&mut self, append: bool) -> u64 {
+        let fh = self.next_fh;
+        self.next_fh += 1;
+        self.fh_map.insert(fh, FhState { buf: Vec::new(), append });
+        fh
+    }
+
+    fn get_fh_state(&mut self, fh: u64) -> Option<&mut FhState> {
+        self.fh_map.get_mut(&fh)
+    }
+
+    fn release_fh(&mut self, fh: u64) {
+        self.fh_map.remove(&fh);
+    }
+}
+
 pub struct RemoteFileSystem {
     http_client: Arc<dyn HttpBackend>,
     runtime: Runtime,
     inode_to_path: HashMap<u64, String>,
     path_to_inode: HashMap<String, u64>,
     next_inode: u64,
+    fh_manager: FhManager,
 }
 
 impl RemoteFileSystem {
@@ -30,6 +66,7 @@ impl RemoteFileSystem {
             inode_to_path: HashMap::new(),
             path_to_inode: HashMap::new(),
             next_inode: 2,
+            fh_manager: FhManager::new(),
         };
         fs.inode_to_path.insert(FUSE_ROOT_ID, "/".to_string());
         fs.path_to_inode.insert("/".to_string(), FUSE_ROOT_ID);
@@ -400,9 +437,9 @@ impl Filesystem for RemoteFileSystem {
 
         let client = self.http_client.clone();
         let path_clone = full_path.clone();
-        let result = self.runtime.block_on(async move {
-            client.create_directory(&path_clone).await
-        });
+        let result = self
+            .runtime
+            .block_on(async move { client.create_directory(&path_clone).await });
 
         match result {
             Ok(_) => {
@@ -451,7 +488,9 @@ impl Filesystem for RemoteFileSystem {
 
         let client = self.http_client.clone();
         let path_clone = full_path.clone();
-        let result = self.runtime.block_on(async move { client.delete_path(&path_clone).await });
+        let result = self
+            .runtime
+            .block_on(async move { client.delete_path(&path_clone).await });
 
         match result {
             Ok(_) => {
@@ -494,7 +533,9 @@ impl Filesystem for RemoteFileSystem {
 
         let client = self.http_client.clone();
         let path_clone = full_path.clone();
-        let result = self.runtime.block_on(async move { client.delete_path(&path_clone).await });
+        let result = self
+            .runtime
+            .block_on(async move { client.delete_path(&path_clone).await });
 
         match result {
             Ok(_) => {
@@ -511,7 +552,144 @@ impl Filesystem for RemoteFileSystem {
         }
     }
 
+    fn create(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+        flags: i32,
+        reply: fuser::ReplyCreate,
+    ) {
+        // allocate fh and empty buffer, return attr + fh
+        let name_str = match name.to_str() {
+            Some(s) => s,
+            None => {
+                reply.error(ENOENT);
+                return;
+            }
+        };
+        let parent_path = match self.get_path_for_inode(parent) {
+            Some(p) => p,
+            None => {
+                reply.error(ENOENT);
+                return;
+            }
+        };
+        let full_path = if parent_path == "/" {
+            format!("/{}", name_str)
+        } else {
+            format!("{}/{}", parent_path, name_str)
+        };
 
+        // create a placeholder inode and attr (you may want to call server metadata later)
+        let ino = self.get_inode_for_path(&full_path);
+        let perm_bits = (mode & !umask) as u16;
+
+        let entry = FileEntry {
+            name: name_str.to_string(),
+            is_dir: false,
+            size: 0,
+            modified: Some(0),
+            permissions: Some(perm_bits.into()),
+        };
+
+        if (flags & O_EXCL) != 0 {
+            // if file exists, return EEXIST
+            if let Ok((_, _)) = self.lookup_path(parent, name_str) {
+                reply.error(libc::EEXIST);
+                return;
+            }
+        }
+
+        let attr = self.file_entry_to_attr(&entry, ino);
+
+        // Decide creation/truncation/prefetch behavior
+        let truncate = (flags & O_TRUNC) != 0;
+        let append = (flags & O_APPEND) != 0;
+        let client = self.http_client.clone();
+        let path_clone = full_path.clone();
+
+        // If file exists and O_TRUNC not set -> prefetch existing contents into the fh buffer
+        // If O_TRUNC set -> truncate immediately (upload empty)
+        // If file doesn't exist -> create empty file on server (could be lazy instead)
+        match self
+            .runtime
+            .block_on(async move { client.get_file_metadata(&path_clone).await })
+        {
+            Ok(meta) => {
+                if truncate {
+                    // truncate on server now
+                    let client2 = self.http_client.clone();
+                    let path2 = full_path.clone();
+                    if let Err(e) = self
+                        .runtime
+                        .block_on(async move { client2.put_file_stream(&path2, Vec::new()).await })
+                    {
+                        error!("create (truncate) failed: {}", e);
+                        reply.error(e.to_errno());
+                        return;
+                    }
+                } else {
+                    // Prefetch whole file so writes can patch existing data
+                    let client2 = self.http_client.clone();
+                    let path2 = full_path.clone();
+                    let size = meta.size as usize;
+                    match self
+                        .runtime
+                        .block_on(async move { client2.read_range(&path2, 0, size).await })
+                    {
+                        Ok(data) => {
+                            let fh = self.fh_manager.alloc_fh(append);
+                            if let Some(state) = self.fh_manager.get_fh_state(fh) {
+                                state.buf = data;
+                            }
+                            // reply below after setting fh
+                            reply.created(&TTL, &attr, 0, fh, 0);
+                            return;
+                        }
+                        Err(e) => {
+                            error!("create prefetch failed: {}", e);
+                            reply.error(e.to_errno());
+                            return;
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                // file doesn't exist -> create empty file on server now (or leave lazy)
+                let client2 = self.http_client.clone();
+                let path2 = full_path.clone();
+                if let Err(e) = self
+                    .runtime
+                    .block_on(async move { client2.put_file_stream(&path2, Vec::new()).await })
+                {
+                    error!("create (new file) failed: {}", e);
+                    reply.error(e.to_errno());
+                    return;
+                }
+            }
+        }
+
+        // default path: alloc fh with empty buffer (already handled above in some branches)
+        let fh = self.fh_manager.alloc_fh(append);
+        reply.created(&TTL, &attr, 0, fh, 0);
+    }
+    fn write(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        data: &[u8],
+        write_flags: u32,
+        flags: i32,
+        lock_owner: Option<u64>,
+        reply: fuser::ReplyWrite,
+    ) {
+        todo!();
+    }
 }
 
 #[cfg(test)]
@@ -521,7 +699,7 @@ mod tests {
     use crate::fs::types::FileEntry;
     use async_trait::async_trait;
     use std::collections::HashMap;
-    use std::os::unix::raw::mode_t;
+    use libc::mode_t;
     use std::sync::Arc;
 
     #[derive(Clone)]
@@ -653,6 +831,10 @@ mod tests {
         async fn delete_path(&self, path: &str) -> Result<(), HttpError> {
             todo!();
         }
+
+        async fn put_file_stream(&self, path: &str, data: Vec<u8>) -> Result<(), HttpError> {
+            todo!();
+        }
     }
 
     #[test]
@@ -761,19 +943,27 @@ mod tests {
 
         let ino = FUSE_ROOT_ID;
         // offset 0: should return all entries
-        let all = fs.readdir_entries(ino, 0).expect("readdir_entries should succeed");
+        let all = fs
+            .readdir_entries(ino, 0)
+            .expect("readdir_entries should succeed");
         assert_eq!(all.len(), 4); // ., .., f.txt, dir
 
         // offset 1: should skip "."
-        let skip_dot = fs.readdir_entries(ino, 1).expect("readdir_entries should succeed");
+        let skip_dot = fs
+            .readdir_entries(ino, 1)
+            .expect("readdir_entries should succeed");
         assert_eq!(skip_dot.len(), 3); // .., f.txt, dir
 
         // offset 2: should skip ".", ".."
-        let skip_dot_dot = fs.readdir_entries(ino, 2).expect("readdir_entries should succeed");
+        let skip_dot_dot = fs
+            .readdir_entries(ino, 2)
+            .expect("readdir_entries should succeed");
         assert_eq!(skip_dot_dot.len(), 2); // f.txt, dir
 
         // offset beyond: should return empty
-        let beyond = fs.readdir_entries(ino, 10).expect("readdir_entries should succeed");
+        let beyond = fs
+            .readdir_entries(ino, 10)
+            .expect("readdir_entries should succeed");
         assert_eq!(beyond.len(), 0);
     }
 
@@ -783,13 +973,17 @@ mod tests {
         let mut fs = RemoteFileSystem::new(backend.clone());
 
         // lookup existing file
-        let (ino, attr) = fs.lookup_path(FUSE_ROOT_ID, "f.txt").expect("lookup should succeed");
+        let (ino, attr) = fs
+            .lookup_path(FUSE_ROOT_ID, "f.txt")
+            .expect("lookup should succeed");
         assert_eq!(attr.kind, FileType::RegularFile);
         assert_eq!(attr.size, 10);
         assert_eq!(fs.get_path_for_inode(ino).unwrap(), "/f.txt");
 
         // lookup existing directory
-        let (d_ino, d_attr) = fs.lookup_path(FUSE_ROOT_ID, "dir").expect("lookup should succeed");
+        let (d_ino, d_attr) = fs
+            .lookup_path(FUSE_ROOT_ID, "dir")
+            .expect("lookup should succeed");
         assert_eq!(d_attr.kind, FileType::Directory);
         assert_eq!(fs.get_path_for_inode(d_ino).unwrap(), "/dir");
 
@@ -806,7 +1000,9 @@ mod tests {
         let mut fs = RemoteFileSystem::new(backend.clone());
 
         // getattr root
-        let root_attr = fs.getattr_path(FUSE_ROOT_ID).expect("getattr should succeed");
+        let root_attr = fs
+            .getattr_path(FUSE_ROOT_ID)
+            .expect("getattr should succeed");
         assert_eq!(root_attr.kind, FileType::Directory);
 
         // getattr existing file
@@ -827,7 +1023,4 @@ mod tests {
             Err(HttpError::NotFound)
         ));
     }
-
-
-
 }

@@ -47,6 +47,7 @@ pub trait HttpBackend: Send + Sync {
     async fn read_range(&self, path: &str, offset: u64, length: usize) -> Result<Vec<u8>, HttpError>;
     async fn create_directory(&self, path: &str) -> Result<(), HttpError>;
     async fn delete_path(&self, path: &str) -> Result<(), HttpError>;
+    async fn put_file_stream(&self, path: &str, data: Vec<u8>) -> Result<(), HttpError>;
 }
 
 #[derive(Clone)]
@@ -161,13 +162,23 @@ impl HttpBackend for HttpClient {
     }
 
     async fn delete_path(&self, path: &str) -> Result<(), HttpError> {
-        println!("Deleting path: {}", path);
         let url = format!("{}/files{}", self.base_url, path);
         let resp = self.client.delete(&url).send().await?;
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
             return Err(HttpError::Other(format!("delete_path failed: {} - {}", status, text).into()));
+        }
+        Ok(())
+    }
+
+    async fn put_file_stream(&self, path: &str, data: Vec<u8>) -> Result<(), HttpError> {
+        let url = format!("{}/files{}", self.base_url, path);
+        let resp = self.client.put(&url).body(data).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(HttpError::Other(format!("put_file_stream failed: {} - {}", status, text).into()));
         }
         Ok(())
     }
@@ -241,4 +252,6 @@ mod tests {
         let result = client.read_range("/foo.txt", 2, 3).await.unwrap();
         assert_eq!(result, b"cde");
     }
+
+    
 }
