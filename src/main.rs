@@ -34,7 +34,6 @@ fn main() -> anyhow::Result<()> {
     
     let options = vec![
         MountOption::RW,               // Read-write
-        MountOption::AllowOther, 
         MountOption::FSName("remote-fs".to_string()),
     ];
 

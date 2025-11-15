@@ -562,6 +562,10 @@ impl Filesystem for RemoteFileSystem {
         flags: i32,
         reply: fuser::ReplyCreate,
     ) {
+        debug!(
+            "create called for parent {}, name {:?}, mode {:o}, flags {:o}",
+            parent, name, mode, flags
+        );
         // allocate fh and empty buffer, return attr + fh
         let name_str = match name.to_str() {
             Some(s) => s,
@@ -689,6 +693,29 @@ impl Filesystem for RemoteFileSystem {
         reply: fuser::ReplyWrite,
     ) {
         todo!();
+    }
+
+    fn setattr(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            mode: Option<u32>,
+            uid: Option<u32>,
+            gid: Option<u32>,
+            size: Option<u64>,
+            _atime: Option<fuser::TimeOrNow>,
+            _mtime: Option<fuser::TimeOrNow>,
+            _ctime: Option<SystemTime>,
+            fh: Option<u64>,
+            _crtime: Option<SystemTime>,
+            _chgtime: Option<SystemTime>,
+            _bkuptime: Option<SystemTime>,
+            flags: Option<u32>,
+            reply: ReplyAttr,
+        ) {
+        debug!("setattr called for ino {} with mode {:?}, uid {:?}, gid {:?}, size {:?}, flags {:?}", ino, mode, uid, gid, size, flags);
+        // Return error for unsupported operations
+        reply.error(libc::ENOSYS);
     }
 }
 
