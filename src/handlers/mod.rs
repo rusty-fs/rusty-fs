@@ -5,6 +5,7 @@ use std::{
 };
 
 use axum::{Extension, Json, extract::Path, http::StatusCode};
+use log::warn;
 use serde::Serialize;
 use serde_json::json;
 use std::fs;
@@ -230,10 +231,81 @@ pub async fn delete_path(
     }
 }
 
-async fn create_file() -> StatusCode {
-    // logic to put a file
-    // StatusCode::CREATED
-    todo!()
+pub async fn put_file(
+    file_path: Path<String>,
+    Extension(base_dir): Extension<Arc<String>>,
+    body: axum::body::Bytes,
+) -> Result<StatusCode, StatusCode> {
+    use std::io::Write;
+
+    let requested_raw = file_path.0;
+    if requested_raw.contains("..") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let requested = requested_raw.trim_start_matches('/').to_string();
+    if requested.is_empty() {
+        // no target filename provided
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let full_path = PathBuf::from(base_dir.trim_end_matches('/')).join(&requested);
+    info!("Writing file: {} -> {:?}", requested, full_path);
+
+    // ensure parent directory exists
+    if let Some(parent) = full_path.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            error!("Failed to create parent dirs {:?}: {}", parent, e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    } else {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    let existed = full_path.exists();
+
+    // write to a temporary file in the same directory then rename for atomicity
+    let mut tmp_path = full_path.clone();
+    // append a fixed suffix to avoid changing file basename semantics
+    tmp_path.set_extension(format!(
+        "{}.filer_tmp",
+        tmp_path.extension().and_then(|s| s.to_str()).unwrap_or("")
+    ));
+
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&tmp_path)
+    {
+        Ok(mut f) => {
+            if let Err(e) = f.write_all(&body) {
+                let _ = std::fs::remove_file(&tmp_path);
+                error!("Failed to write temp file {:?}: {}", tmp_path, e);
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+            if let Err(e) = f.sync_all() {
+                // best-effort; continue
+                warn!("sync_all failed for {:?}: {}", tmp_path, e);
+            }
+        }
+        Err(e) => {
+            error!("Failed to create temp file {:?}: {}", tmp_path, e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    if let Err(e) = std::fs::rename(&tmp_path, &full_path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        error!("Failed to rename temp file to target {:?}: {}", full_path, e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    if existed {
+        Ok(StatusCode::OK)
+    } else {
+        Ok(StatusCode::CREATED)
+    }
 }
 
 #[derive(Serialize)]
