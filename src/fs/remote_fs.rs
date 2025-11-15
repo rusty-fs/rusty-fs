@@ -3,14 +3,15 @@ use crate::fs::http_client::HttpError;
 use crate::fs::types::FileEntry;
 use fuser::{FUSE_ROOT_ID, FileAttr, FileType};
 use fuser::{Filesystem, ReplyAttr, ReplyDirectory, ReplyEntry, Request};
+use libc::size_t;
 use libc::{EIO, ENOENT};
-use tracing::info;
 use libc::{O_APPEND, O_EXCL, O_TRUNC};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
+use tracing::info;
 use tracing::{debug, error, warn};
 
 const TTL: Duration = Duration::from_secs(1);
@@ -36,7 +37,13 @@ impl FhManager {
     fn alloc_fh(&mut self, append: bool) -> u64 {
         let fh = self.next_fh;
         self.next_fh += 1;
-        self.fh_map.insert(fh, FhState { buf: Vec::new(), append });
+        self.fh_map.insert(
+            fh,
+            FhState {
+                buf: Vec::new(),
+                append,
+            },
+        );
         fh
     }
 
@@ -101,10 +108,9 @@ impl RemoteFileSystem {
     }
 
     pub fn file_entry_to_attr(&self, entry: &FileEntry, inode: u64) -> FileAttr {
-        let modified = UNIX_EPOCH + Duration::from_secs(entry.modified.unwrap_or(0));
-        let perm = entry
-            .permissions
-            .unwrap_or(if entry.is_dir { 0o755 } else { 0o644 }) as u16;
+        let modified = UNIX_EPOCH + Duration::from_secs(entry.modified);
+        let perm = entry.permissions as u16;
+        // .unwrap_or(if entry.is_dir { 0o755 } else { 0o644 }) as u16;
         FileAttr {
             ino: inode,
             size: entry.size,
@@ -167,13 +173,11 @@ impl RemoteFileSystem {
                 name: "".to_string(),
                 is_dir: true,
                 size: 0,
-                modified: Some(
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                ),
-                permissions: None,
+                modified: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                permissions: 0o755,
             };
             return Ok(self.file_entry_to_attr(&entry, ino));
         }
@@ -191,13 +195,11 @@ impl RemoteFileSystem {
                             name: path_clone.split('/').last().unwrap_or("").to_string(),
                             is_dir: true,
                             size: 0,
-                            modified: Some(
-                                SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_secs(),
-                            ),
-                            permissions: None,
+                            modified: SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs(),
+                            permissions: 0o755,
                         })
                     } else {
                         Err(HttpError::NotFound)
@@ -292,6 +294,262 @@ impl RemoteFileSystem {
         let path_clone = path.clone();
         self.runtime
             .block_on(async move { client.read_range(&path_clone, offset, size).await })
+    }
+
+    pub fn create_directory(
+        &mut self,
+        parent: u64,
+        name: &OsStr,
+        mode: u32,
+    ) -> Result<(u64, FileAttr), HttpError> {
+        let name_str = match name.to_str() {
+            Some(s) => s,
+            None => {
+                error!("mkdir failed: invalid name {:?}", name);
+                return Err(HttpError::Other("invalid name".into()));
+            }
+        };
+        let parent_path = match self.get_path_for_inode(parent) {
+            Some(p) => p,
+            None => {
+                error!("mkdir failed: parent inode {} not found", parent);
+                return Err(HttpError::NotFound);
+            }
+        };
+        let full_path = if parent_path == "/" {
+            format!("/{}", name_str)
+        } else {
+            format!("{}/{}", parent_path, name_str)
+        };
+
+        let client = self.http_client.clone();
+        let path_clone = full_path.clone();
+        match self
+            .runtime
+            .block_on(async move { client.create_directory(&path_clone).await })
+        {
+            Ok(_) => {
+                // After creation, get attributes
+                let inode = self.get_inode_for_path(&full_path);
+                match self.getattr_path(inode) {
+                    Ok(attr) => Ok((inode, attr)),
+                    Err(e) => {
+                        error!("mkdir succeeded but getattr failed: {}", e);
+                        return Err(e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("mkdir failed: {}", e);
+                return Err(e);
+            }
+        }
+    }
+
+    pub fn delete_directory(&mut self, parent: u64, name: &OsStr) -> Result<(), HttpError> {
+        let name_str = match name.to_str() {
+            Some(s) => s,
+            None => {
+                error!("rmdir failed: invalid name {:?}", name);
+                return Err(HttpError::Other("invalid name".into()));
+            }
+        };
+        let parent_path = match self.get_path_for_inode(parent) {
+            Some(p) => p,
+            None => {
+                error!("rmdir failed: parent inode {} not found", parent);
+                return Err(HttpError::NotFound);
+            }
+        };
+        let full_path = if parent_path == "/" {
+            format!("/{}", name_str)
+        } else {
+            format!("{}/{}", parent_path, name_str)
+        };
+
+        let client = self.http_client.clone();
+        let path_clone = full_path.clone();
+        let result = self
+            .runtime
+            .block_on(async move { client.delete_path(&path_clone).await });
+
+        match result {
+            Ok(_) => {
+                // Optionally remove from inode/path maps
+                if let Some(ino) = self.path_to_inode.remove(&full_path) {
+                    self.inode_to_path.remove(&ino);
+                }
+                Ok(())
+            }
+            Err(e) => {
+                error!("rmdir failed: {}", e);
+                Err(e)
+            }
+        }
+    }
+    pub fn create_file(
+        &mut self,
+        parent: u64,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+        flags: i32,
+    ) -> Result<(Duration, FileAttr, u64, u64, u32), HttpError> {
+        // allocate fh and empty buffer, return attr + fh
+        let name_str = match name.to_str() {
+            Some(s) => s,
+            None => {
+                return Err(HttpError::Other("invalid name".into()));
+            }
+        };
+        let parent_path = match self.get_path_for_inode(parent) {
+            Some(p) => p,
+            None => {
+                return Err(HttpError::NotFound);
+            }
+        };
+        let full_path = if parent_path == "/" {
+            format!("/{}", name_str)
+        } else {
+            format!("{}/{}", parent_path, name_str)
+        };
+
+        // create a placeholder inode and attr (you may want to call server metadata later)
+        let ino = self.get_inode_for_path(&full_path);
+        let perm_bits = (mode & !umask) as u16;
+
+        let entry = FileEntry {
+            name: name_str.to_string(),
+            is_dir: false,
+            size: 0,
+            permissions: perm_bits.into(),
+            modified: 0, // will be updated on write
+        };
+
+        if (flags & O_EXCL) != 0 {
+            // if file exists, return EEXIST
+            if let Ok((_, _)) = self.lookup_path(parent, name_str) {
+                return Err(HttpError::AlreadyExists);
+            }
+        }
+
+        let attr = self.file_entry_to_attr(&entry, ino);
+
+        // Decide creation/truncation/prefetch behavior
+        let truncate = (flags & O_TRUNC) != 0;
+        let append = (flags & O_APPEND) != 0;
+        let client = self.http_client.clone();
+        let path_clone = full_path.clone();
+
+        // If file exists and O_TRUNC not set -> prefetch existing contents into the fh buffer
+        // If O_TRUNC set -> truncate immediately (upload empty)
+        // If file doesn't exist -> create empty file on server (could be lazy instead)
+        match self
+            .runtime
+            .block_on(async move { client.get_file_metadata(&path_clone).await })
+        {
+            Ok(meta) => {
+                if truncate {
+                    // truncate on server now
+                    let client2 = self.http_client.clone();
+                    let path2 = full_path.clone();
+                    if let Err(e) = self
+                        .runtime
+                        .block_on(async move { client2.put_file_stream(&path2, Vec::new()).await })
+                    {
+                        error!("create (truncate) failed: {}", e);
+                        return Err(e);
+                    }
+                } else {
+                    // Prefetch whole file so writes can patch existing data
+                    let client2 = self.http_client.clone();
+                    let path2 = full_path.clone();
+                    let size = meta.size as usize;
+                    match self
+                        .runtime
+                        .block_on(async move { client2.read_range(&path2, 0, size).await })
+                    {
+                        Ok(data) => {
+                            let fh = self.fh_manager.alloc_fh(append);
+                            if let Some(state) = self.fh_manager.get_fh_state(fh) {
+                                state.buf = data;
+                            }
+                            // reply below after setting fh
+                            return Ok((TTL, attr, 0, fh, 0));
+                        }
+                        Err(e) => {
+                            error!("create prefetch failed: {}", e);
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                // file doesn't exist -> create empty file on server now (or leave lazy)
+                let client2 = self.http_client.clone();
+                let path2 = full_path.clone();
+                if let Err(e) = self
+                    .runtime
+                    .block_on(async move { client2.put_file_stream(&path2, Vec::new()).await })
+                {
+                    error!("create (new file) failed: {}", e);
+                    return Err(e);
+                }
+            }
+        }
+
+        // default path: alloc fh with empty buffer (already handled above in some branches)
+        let fh = self.fh_manager.alloc_fh(append);
+        return Ok((TTL, attr, 0, fh, 0));
+    }
+
+    pub fn write_bytes(
+        &mut self,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        data: &[u8],
+        write_flags: u32,
+        flags: i32,
+        lock_owner: Option<u64>,
+    ) -> Result<(u32), HttpError> {
+        let path = match self.get_path_for_inode(ino) {
+            Some(p) => p,
+            None => {
+                error!("write failed: inode {} not found", ino);
+                return Err(HttpError::NotFound);
+            }
+        };
+
+        match self.fh_manager.get_fh_state(fh) {
+            Some(state) => {
+                let off = offset as usize;
+                // Ensure buffer is large enough
+                if state.buf.len() < off + data.len() {
+                    state.buf.resize(off + data.len(), 0);
+                }
+                // Write data into buffer
+                state.buf[off..off + data.len()].copy_from_slice(data);
+                let client = self.http_client.clone();
+                let path_clone = path.clone();
+                let data_clone = state.buf.clone();
+                let result = self
+                    .runtime
+                    .block_on(async move { client.put_file_stream(&path_clone, data_clone).await });
+                match result {
+                    Ok(_) => {
+                        Ok(data.len() as u32)
+                    }
+                    Err(e) => {
+                        error!("write failed during upload: {}", e);
+                        return Err(e);
+                    }
+                }
+            }
+            None => {
+                return Err(HttpError::Other("invalid file handle".into()));
+            }
+        }
     }
 }
 
@@ -413,47 +671,11 @@ impl Filesystem for RemoteFileSystem {
         reply: fuser::ReplyEntry,
     ) {
         debug!("mkdir called for parent {}, name {:?}", parent, name);
-        let name_str = match name.to_str() {
-            Some(s) => s,
-            None => {
-                error!("mkdir failed: invalid name {:?}", name);
-                reply.error(ENOENT);
-                return;
-            }
-        };
-        let parent_path = match self.get_path_for_inode(parent) {
-            Some(p) => p,
-            None => {
-                error!("mkdir failed: parent inode {} not found", parent);
-                reply.error(ENOENT);
-                return;
-            }
-        };
-        let full_path = if parent_path == "/" {
-            format!("/{}", name_str)
-        } else {
-            format!("{}/{}", parent_path, name_str)
-        };
-
-        let client = self.http_client.clone();
-        let path_clone = full_path.clone();
-        let result = self
-            .runtime
-            .block_on(async move { client.create_directory(&path_clone).await });
-
-        match result {
-            Ok(_) => {
-                // After creation, get attributes
-                let inode = self.get_inode_for_path(&full_path);
-                match self.getattr_path(inode) {
-                    Ok(attr) => {
-                        reply.entry(&TTL, &attr, 0);
-                    }
-                    Err(e) => {
-                        error!("mkdir succeeded but getattr failed: {}", e);
-                        reply.error(e.to_errno());
-                    }
-                }
+        // Calculate actual permissions
+        let actual_mode = mode & !umask;
+        match self.create_directory(parent, name, actual_mode) {
+            Ok((_inode, attr)) => {
+                reply.entry(&TTL, &attr, 0);
             }
             Err(e) => {
                 error!("mkdir failed: {}", e);
@@ -464,40 +686,9 @@ impl Filesystem for RemoteFileSystem {
 
     fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
         debug!("rmdir called for parent {}, name {:?}", parent, name);
-        let name_str = match name.to_str() {
-            Some(s) => s,
-            None => {
-                error!("rmdir failed: invalid name {:?}", name);
-                reply.error(ENOENT);
-                return;
-            }
-        };
-        let parent_path = match self.get_path_for_inode(parent) {
-            Some(p) => p,
-            None => {
-                error!("rmdir failed: parent inode {} not found", parent);
-                reply.error(ENOENT);
-                return;
-            }
-        };
-        let full_path = if parent_path == "/" {
-            format!("/{}", name_str)
-        } else {
-            format!("{}/{}", parent_path, name_str)
-        };
 
-        let client = self.http_client.clone();
-        let path_clone = full_path.clone();
-        let result = self
-            .runtime
-            .block_on(async move { client.delete_path(&path_clone).await });
-
-        match result {
+        match self.delete_directory(parent, name) {
             Ok(_) => {
-                // Optionally remove from inode/path maps
-                if let Some(ino) = self.path_to_inode.remove(&full_path) {
-                    self.inode_to_path.remove(&ino);
-                }
                 reply.ok();
             }
             Err(e) => {
@@ -509,40 +700,9 @@ impl Filesystem for RemoteFileSystem {
 
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
         debug!("unlink called for parent {}, name {:?}", parent, name);
-        let name_str = match name.to_str() {
-            Some(s) => s,
-            None => {
-                error!("unlink failed: invalid name {:?}", name);
-                reply.error(ENOENT);
-                return;
-            }
-        };
-        let parent_path = match self.get_path_for_inode(parent) {
-            Some(p) => p,
-            None => {
-                error!("unlink failed: parent inode {} not found", parent);
-                reply.error(ENOENT);
-                return;
-            }
-        };
-        let full_path = if parent_path == "/" {
-            format!("/{}", name_str)
-        } else {
-            format!("{}/{}", parent_path, name_str)
-        };
 
-        let client = self.http_client.clone();
-        let path_clone = full_path.clone();
-        let result = self
-            .runtime
-            .block_on(async move { client.delete_path(&path_clone).await });
-
-        match result {
+        match self.delete_directory(parent, name) {
             Ok(_) => {
-                // Optionally remove from inode/path maps
-                if let Some(ino) = self.path_to_inode.remove(&full_path) {
-                    self.inode_to_path.remove(&ino);
-                }
                 reply.ok();
             }
             Err(e) => {
@@ -566,119 +726,15 @@ impl Filesystem for RemoteFileSystem {
             "create called for parent {}, name {:?}, mode {:o}, flags {:o}",
             parent, name, mode, flags
         );
-        // allocate fh and empty buffer, return attr + fh
-        let name_str = match name.to_str() {
-            Some(s) => s,
-            None => {
-                reply.error(ENOENT);
-                return;
+        match self.create_file(parent, name, mode, umask, flags) {
+            Ok((ttl, attr, rdev, fh, write_flags)) => {
+                reply.created(&ttl, &attr, rdev, fh, write_flags);
             }
-        };
-        let parent_path = match self.get_path_for_inode(parent) {
-            Some(p) => p,
-            None => {
-                reply.error(ENOENT);
-                return;
-            }
-        };
-        let full_path = if parent_path == "/" {
-            format!("/{}", name_str)
-        } else {
-            format!("{}/{}", parent_path, name_str)
-        };
-
-        // create a placeholder inode and attr (you may want to call server metadata later)
-        let ino = self.get_inode_for_path(&full_path);
-        let perm_bits = (mode & !umask) as u16;
-
-        let entry = FileEntry {
-            name: name_str.to_string(),
-            is_dir: false,
-            size: 0,
-            modified: Some(0),
-            permissions: Some(perm_bits.into()),
-        };
-
-        if (flags & O_EXCL) != 0 {
-            // if file exists, return EEXIST
-            if let Ok((_, _)) = self.lookup_path(parent, name_str) {
-                reply.error(libc::EEXIST);
-                return;
+            Err(e) => {
+                error!("create failed: {}", e);
+                reply.error(e.to_errno());
             }
         }
-
-        let attr = self.file_entry_to_attr(&entry, ino);
-
-        // Decide creation/truncation/prefetch behavior
-        let truncate = (flags & O_TRUNC) != 0;
-        let append = (flags & O_APPEND) != 0;
-        let client = self.http_client.clone();
-        let path_clone = full_path.clone();
-
-        // If file exists and O_TRUNC not set -> prefetch existing contents into the fh buffer
-        // If O_TRUNC set -> truncate immediately (upload empty)
-        // If file doesn't exist -> create empty file on server (could be lazy instead)
-        match self
-            .runtime
-            .block_on(async move { client.get_file_metadata(&path_clone).await })
-        {
-            Ok(meta) => {
-                if truncate {
-                    // truncate on server now
-                    let client2 = self.http_client.clone();
-                    let path2 = full_path.clone();
-                    if let Err(e) = self
-                        .runtime
-                        .block_on(async move { client2.put_file_stream(&path2, Vec::new()).await })
-                    {
-                        error!("create (truncate) failed: {}", e);
-                        reply.error(e.to_errno());
-                        return;
-                    }
-                } else {
-                    // Prefetch whole file so writes can patch existing data
-                    let client2 = self.http_client.clone();
-                    let path2 = full_path.clone();
-                    let size = meta.size as usize;
-                    match self
-                        .runtime
-                        .block_on(async move { client2.read_range(&path2, 0, size).await })
-                    {
-                        Ok(data) => {
-                            let fh = self.fh_manager.alloc_fh(append);
-                            if let Some(state) = self.fh_manager.get_fh_state(fh) {
-                                state.buf = data;
-                            }
-                            // reply below after setting fh
-                            reply.created(&TTL, &attr, 0, fh, 0);
-                            return;
-                        }
-                        Err(e) => {
-                            error!("create prefetch failed: {}", e);
-                            reply.error(e.to_errno());
-                            return;
-                        }
-                    }
-                }
-            }
-            Err(_) => {
-                // file doesn't exist -> create empty file on server now (or leave lazy)
-                let client2 = self.http_client.clone();
-                let path2 = full_path.clone();
-                if let Err(e) = self
-                    .runtime
-                    .block_on(async move { client2.put_file_stream(&path2, Vec::new()).await })
-                {
-                    error!("create (new file) failed: {}", e);
-                    reply.error(e.to_errno());
-                    return;
-                }
-            }
-        }
-
-        // default path: alloc fh with empty buffer (already handled above in some branches)
-        let fh = self.fh_manager.alloc_fh(append);
-        reply.created(&TTL, &attr, 0, fh, 0);
     }
     fn write(
         &mut self,
@@ -692,28 +748,46 @@ impl Filesystem for RemoteFileSystem {
         lock_owner: Option<u64>,
         reply: fuser::ReplyWrite,
     ) {
-        todo!();
+        debug!(
+            "write called for ino {}, fh {}, offset {}, size {}",
+            ino,
+            fh,
+            offset,
+            data.len()
+        );
+        match self.write_bytes(ino, fh, offset, data, write_flags, flags, lock_owner) {
+            Ok(written) => {
+                reply.written(written);
+            }
+            Err(e) => {
+                error!("write failed: {}", e);
+                reply.error(e.to_errno());
+            }
+        }
     }
 
     fn setattr(
-            &mut self,
-            _req: &Request<'_>,
-            ino: u64,
-            mode: Option<u32>,
-            uid: Option<u32>,
-            gid: Option<u32>,
-            size: Option<u64>,
-            _atime: Option<fuser::TimeOrNow>,
-            _mtime: Option<fuser::TimeOrNow>,
-            _ctime: Option<SystemTime>,
-            fh: Option<u64>,
-            _crtime: Option<SystemTime>,
-            _chgtime: Option<SystemTime>,
-            _bkuptime: Option<SystemTime>,
-            flags: Option<u32>,
-            reply: ReplyAttr,
-        ) {
-        debug!("setattr called for ino {} with mode {:?}, uid {:?}, gid {:?}, size {:?}, flags {:?}", ino, mode, uid, gid, size, flags);
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        size: Option<u64>,
+        _atime: Option<fuser::TimeOrNow>,
+        _mtime: Option<fuser::TimeOrNow>,
+        _ctime: Option<SystemTime>,
+        fh: Option<u64>,
+        _crtime: Option<SystemTime>,
+        _chgtime: Option<SystemTime>,
+        _bkuptime: Option<SystemTime>,
+        flags: Option<u32>,
+        reply: ReplyAttr,
+    ) {
+        debug!(
+            "setattr called for ino {} with mode {:?}, uid {:?}, gid {:?}, size {:?}, flags {:?}",
+            ino, mode, uid, gid, size, flags
+        );
         // Return error for unsupported operations
         reply.error(libc::ENOSYS);
     }
@@ -726,90 +800,107 @@ mod tests {
     use crate::fs::types::FileEntry;
     use async_trait::async_trait;
     use std::collections::HashMap;
-    use libc::mode_t;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+    use std::time::SystemTime;
 
-    #[derive(Clone)]
     struct FakeBackend {
-        listing: HashMap<String, Vec<FileEntry>>,
-        metadata: HashMap<String, FileEntry>,
-        contents: HashMap<String, Vec<u8>>,
+        listing: Mutex<HashMap<String, Vec<FileEntry>>>,
+        metadata: Mutex<HashMap<String, FileEntry>>,
+        contents: Mutex<HashMap<String, Vec<u8>>>,
     }
 
     impl FakeBackend {
         fn new() -> Self {
-            let mut listing = HashMap::new();
+            let mut listing_map = HashMap::new();
             let root_children = vec![
                 FileEntry {
                     name: "f.txt".to_string(),
                     is_dir: false,
                     size: 10,
-                    modified: Some(1),
-                    permissions: Some(0o644 as mode_t),
+                    modified: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    permissions: 0o644,
                 },
                 FileEntry {
                     name: "dir".to_string(),
                     is_dir: true,
                     size: 0,
-                    modified: Some(2),
-                    permissions: Some(0o755 as mode_t),
+                    modified: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    permissions: 0o755,
                 },
             ];
-            listing.insert("/".to_string(), root_children.clone());
+            listing_map.insert("/".to_string(), root_children.clone());
 
-            listing.insert(
+            listing_map.insert(
                 "/dir".to_string(),
                 vec![FileEntry {
                     name: "inner.txt".to_string(),
                     is_dir: false,
                     size: 5,
-                    modified: Some(3),
-                    permissions: Some(0o600 as mode_t),
+                    modified: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    permissions: 0o600,
                 }],
             );
 
             // metadata map for direct lookup
-            let mut metadata = HashMap::new();
-            metadata.insert(
+            let mut metadata_map = HashMap::new();
+            metadata_map.insert(
                 "/f.txt".to_string(),
                 FileEntry {
                     name: "f.txt".to_string(),
                     is_dir: false,
                     size: 10,
-                    modified: Some(1),
-                    permissions: Some(0o644 as mode_t),
+                    modified: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    permissions: 0o644,
                 },
             );
-            metadata.insert(
+            metadata_map.insert(
                 "/dir".to_string(),
                 FileEntry {
                     name: "dir".to_string(),
                     is_dir: true,
                     size: 0,
-                    modified: Some(2),
-                    permissions: Some(0o755 as mode_t),
+                    modified: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    permissions: 0o755,
                 },
             );
-            metadata.insert(
+            metadata_map.insert(
                 "/dir/inner.txt".to_string(),
                 FileEntry {
                     name: "inner.txt".to_string(),
                     is_dir: false,
                     size: 5,
-                    modified: Some(3),
-                    permissions: Some(0o600 as mode_t),
+                    modified: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    permissions: 0o600,
                 },
             );
 
             // contents map for read_range
-            let mut contents = HashMap::new();
-            contents.insert("/f.txt".to_string(), b"0123456789".to_vec()); // 10 bytes
-            contents.insert("/dir/inner.txt".to_string(), b"abcde".to_vec()); // 5 bytes
+            let mut contents_map = HashMap::new();
+            contents_map.insert("/f.txt".to_string(), b"0123456789".to_vec()); // 10 bytes
+            contents_map.insert("/dir/inner.txt".to_string(), b"abcde".to_vec()); // 5 bytes
 
             Self {
-                listing,
-                metadata,
-                contents,
+                listing: Mutex::new(listing_map),
+                metadata: Mutex::new(metadata_map),
+                contents: Mutex::new(contents_map),
             }
         }
     }
@@ -817,7 +908,8 @@ mod tests {
     #[async_trait]
     impl HttpBackend for FakeBackend {
         async fn list_directory(&self, path: &str) -> Result<Vec<FileEntry>, HttpError> {
-            if let Some(vec) = self.listing.get(path) {
+            let listing = self.listing.lock().unwrap();
+            if let Some(vec) = listing.get(path) {
                 Ok(vec.clone())
             } else {
                 Err(HttpError::NotFound)
@@ -825,7 +917,8 @@ mod tests {
         }
 
         async fn get_file_metadata(&self, path: &str) -> Result<FileEntry, HttpError> {
-            if let Some(entry) = self.metadata.get(path) {
+            let metadata = self.metadata.lock().unwrap();
+            if let Some(entry) = metadata.get(path) {
                 Ok(entry.clone())
             } else {
                 Err(HttpError::NotFound)
@@ -838,7 +931,8 @@ mod tests {
             offset: u64,
             length: usize,
         ) -> Result<Vec<u8>, HttpError> {
-            if let Some(data) = self.contents.get(path) {
+            let contents = self.contents.lock().unwrap();
+            if let Some(data) = contents.get(path) {
                 let off = offset as usize;
                 if off >= data.len() {
                     return Ok(vec![]);
@@ -851,16 +945,41 @@ mod tests {
         }
 
         async fn create_directory(&self, path: &str) -> Result<(), HttpError> {
-            // For testing, just succeed if parent exists
-            todo!();
+            // Create directory in listing map
+            let mut listing = self.listing.lock().unwrap();
+            listing.insert(path.to_string(), Vec::new());
+            Ok(())
         }
 
         async fn delete_path(&self, path: &str) -> Result<(), HttpError> {
-            todo!();
+            // Remove from listing, metadata, contents
+            let mut listing = self.listing.lock().unwrap();
+            let mut metadata = self.metadata.lock().unwrap();
+            let mut contents = self.contents.lock().unwrap();
+            listing.remove(path);
+            metadata.remove(path);
+            contents.remove(path);
+            Ok(())
         }
 
         async fn put_file_stream(&self, path: &str, data: Vec<u8>) -> Result<(), HttpError> {
-            todo!();
+            let mut contents = self.contents.lock().unwrap();
+            contents.insert(path.to_string(), data.clone());
+            let mut metadata = self.metadata.lock().unwrap();
+            metadata.insert(
+                path.to_string(),
+                FileEntry {
+                    name: path.split('/').last().unwrap_or("").to_string(),
+                    is_dir: false,
+                    size: data.len() as u64,
+                    modified: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    permissions: 0o644,
+                },
+            );
+            Ok(())
         }
     }
 
@@ -898,8 +1017,11 @@ mod tests {
             name: "f.txt".into(),
             is_dir: false,
             size: 1234,
-            modified: Some(100),
-            permissions: Some(0o644 as mode_t),
+            modified: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            permissions: 0o644,
         };
         let attr = fs.file_entry_to_attr(&entry_file, 42);
         assert_eq!(attr.ino, 42);
@@ -911,8 +1033,11 @@ mod tests {
             name: "d".into(),
             is_dir: true,
             size: 0,
-            modified: Some(200),
-            permissions: Some(0o755 as mode_t),
+            modified: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            permissions: 0o755,
         };
         let attrd = fs.file_entry_to_attr(&entry_dir, 43);
         assert_eq!(attrd.kind, FileType::Directory);

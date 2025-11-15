@@ -35,7 +35,9 @@ fn main() -> anyhow::Result<()> {
     let options = vec![
         MountOption::RW,               // Read-write
         MountOption::FSName("remote-fs".to_string()),
-    ];
+        MountOption::CUSTOM("noappledouble".to_string()), // macOS specific option
+        MountOption::CUSTOM("noapplexattr".to_string()), // macOS specific option
+        ];
 
     fuser::mount2(fs, mountpoint, &options)?;
     

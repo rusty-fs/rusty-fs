@@ -12,6 +12,8 @@ pub enum HttpError {
     NotFound,
     #[error("permission denied")]
     PermissionDenied,
+    #[error("already exists")]
+    AlreadyExists,
     #[error("network error: {0}")]
     Network(String),
     #[error("other: {0}")]
@@ -23,6 +25,7 @@ impl HttpError {
         match self {
             HttpError::NotFound => ENOENT,
             HttpError::PermissionDenied => EACCES,
+            HttpError::AlreadyExists => libc::EEXIST,
             HttpError::Network(_) | HttpError::Other(_) => EIO,
         }
     }
