@@ -1,3 +1,5 @@
+// FUSE trait implementation for RemoteFileSystem
+
 use crate::fs::remote_fs::RemoteFileSystem;
 use fuser::{Filesystem, ReplyAttr, ReplyDirectory, ReplyEntry, ReplyEmpty, Request};
 use libc::ENOENT;
@@ -6,7 +8,6 @@ use std::time::SystemTime;
 use tracing::{debug, error};
 
 impl Filesystem for RemoteFileSystem {
-    // Use lookup_path helper
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         debug!("lookup: parent={}, name={:?}", parent, name);
         let name_str = match name.to_str() {
@@ -28,9 +29,7 @@ impl Filesystem for RemoteFileSystem {
         }
     }
 
-    // Use getattr helper
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        // debug!("getattr: ino={}", ino);
         match self.getattr(ino) {
             Ok(attr) => {
                 reply.attr(&self.config.ttl, &attr);
@@ -42,7 +41,6 @@ impl Filesystem for RemoteFileSystem {
         }
     }
 
-    // Use readdir helper
     fn readdir(
         &mut self,
         _req: &Request,
@@ -54,8 +52,7 @@ impl Filesystem for RemoteFileSystem {
         match self.readdir_entries(ino, offset) {
             Ok(items) => {
                 for (i, (entry_ino, file_type, name)) in items.into_iter().enumerate() {
-                    // compute an offset value for reply.add — keep same semantics as before
-                    let entry_offset = offset + (i as i64) + 1; // tune to match previous current_offset
+                    let entry_offset = offset + (i as i64) + 1;
                     if reply.add(entry_ino, entry_offset, file_type, name) {
                         reply.ok();
                         return;
@@ -70,7 +67,6 @@ impl Filesystem for RemoteFileSystem {
         }
     }
 
-    // Use open_path helper
     fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
         debug!("open called for ino {}", ino);
         match self.open(ino) {
@@ -84,7 +80,6 @@ impl Filesystem for RemoteFileSystem {
         }
     }
 
-    // Use read_bytes helper
     fn read(
         &mut self,
         _req: &Request<'_>,
@@ -111,7 +106,6 @@ impl Filesystem for RemoteFileSystem {
         }
     }
 
-    // Use create_directory helper
     fn mkdir(
         &mut self,
         _req: &Request<'_>,
@@ -122,7 +116,6 @@ impl Filesystem for RemoteFileSystem {
         reply: fuser::ReplyEntry,
     ) {
         debug!("mkdir called for parent {}, name {:?}", parent, name);
-        // Calculate actual permissions
         let actual_mode = mode & !umask;
         match self.create_directory(parent, name, actual_mode) {
             Ok((_, attr)) => {
@@ -137,7 +130,6 @@ impl Filesystem for RemoteFileSystem {
 
     fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
         debug!("rmdir called for parent {}, name {:?}", parent, name);
-
         match self.delete_directory(parent, name) {
             Ok(_) => {
                 reply.ok();
@@ -151,7 +143,6 @@ impl Filesystem for RemoteFileSystem {
 
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
         debug!("unlink called for parent {}, name {:?}", parent, name);
-
         match self.delete_directory(parent, name) {
             Ok(_) => {
                 reply.ok();
@@ -187,6 +178,7 @@ impl Filesystem for RemoteFileSystem {
             }
         }
     }
+
     fn write(
         &mut self,
         _req: &Request<'_>,
@@ -201,10 +193,7 @@ impl Filesystem for RemoteFileSystem {
     ) {
         debug!(
             "write called for ino {}, fh {}, offset {}, size {}",
-            ino,
-            fh,
-            offset,
-            data.len()
+            ino, fh, offset, data.len()
         );
         match self.write_bytes(ino, fh, offset, data, write_flags, flags, lock_owner) {
             Ok(written) => {
@@ -236,7 +225,6 @@ impl Filesystem for RemoteFileSystem {
         reply: ReplyAttr,
     ) {
         debug!("setattr called for ino {} with size {:?}", ino, size);
-
         match self.setattr(ino, _mode, _uid, _gid, size) {
             Ok(attr) => {
                 reply.attr(&self.config.ttl, &attr);
@@ -260,7 +248,6 @@ impl Filesystem for RemoteFileSystem {
     ) {
         debug!("release called for fh {}", fh);
         
-        // Extract data to flush before releasing the mutable borrow
         let data_to_flush = {
             if let Some(state) = self.fh_manager.get_fh_state(fh) {
                 if state.dirty && !state.buf.is_empty() {
@@ -273,11 +260,10 @@ impl Filesystem for RemoteFileSystem {
             }
         };
         
-        // Now flush if we have data
         if let Some(data) = data_to_flush {
             if let Some(path) = self.get_path_for_inode(ino) {
                 let client = self.http_client.clone();
-                match crate::fs::runtime::runtime().block_on(async move {
+                match crate::fs::utils::runtime().block_on(async move {
                     client.put_file_stream(&path, data, None, None).await
                 }) {
                     Ok(_) => {
@@ -290,7 +276,6 @@ impl Filesystem for RemoteFileSystem {
             }
         }
         
-        // Release the file handle
         self.fh_manager.release_fh(fh);
         reply.ok();
     }

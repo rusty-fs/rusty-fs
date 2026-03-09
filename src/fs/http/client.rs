@@ -72,7 +72,6 @@ pub struct HttpClient {
 
 impl HttpClient {
     pub fn new(base_url: String) -> Self {
-        // Ensure the base_url has the protocol
         let base_url = if base_url.starts_with("http://") || base_url.starts_with("https://") {
             base_url
         } else {
@@ -88,10 +87,6 @@ impl HttpClient {
 
 #[async_trait]
 impl HttpBackend for HttpClient {
-    /// List directory contents at the given path.
-    /// Calls GET /list{path} which returns a DirectoryListing JSON object
-    /// Example: GET /list/some/directory
-    /// Returns a Vec<FileEntry>
     async fn list_directory(&self, path: &str) -> Result<Vec<FileEntry>, HttpError> {
         let url = format!("{}/list{}", self.base_url, path);
         debug!("Listing directory at URL: {}", url);
@@ -100,15 +95,12 @@ impl HttpBackend for HttpClient {
 
         match response {
             Ok(response) => {
-                // Get the response text first to debug
                 let response_text = response.text().await?;
 
-                // Check if response is empty
                 if response_text.trim().is_empty() {
                     return Err(HttpError::Other("Empty response from server".into()));
                 }
 
-                // Parse the JSON as DirectoryListing and extract the files array
                 let listing: DirectoryListing =
                     serde_json::from_str(&response_text).map_err(|e| {
                         HttpError::Other(
@@ -126,10 +118,6 @@ impl HttpBackend for HttpClient {
         }
     }
 
-    /// Get metadata for a single file or directory
-    /// Calls GET /meta{path} which returns a FileEntry JSON object
-    /// Example: GET /meta/some/file.txt    
-    /// Returns a FileEntry
     async fn get_file_metadata(&self, path: &str) -> Result<FileEntry, HttpError> {
         let url = format!("{}/meta{}", self.base_url, path);
         let resp = self.client.get(&url).send().await?;
@@ -148,11 +136,6 @@ impl HttpBackend for HttpClient {
         Ok(entry)
     }
 
-    /// Read a byte range of the file. Offset is u64, length is usize.
-    /// Returns a Vec<u8> with the data.
-    /// Calls GET /file{path} with Range header.
-    /// Example: Range: bytes=0-1023 to read first 1024 bytes
-    /// Server must support Range requests.
     async fn read_range(
         &self,
         path: &str,
@@ -161,7 +144,6 @@ impl HttpBackend for HttpClient {
     ) -> Result<Vec<u8>, HttpError> {
         debug!("Reading range {}-{} from file {}", offset, offset + length as u64 - 1, path);
         let url = format!("{}/files{}", self.base_url, path);
-        // Range: bytes=START-END (END inclusive)
         let end = offset.saturating_add(length as u64).saturating_sub(1);
         let range_header = format!("bytes={}-{}", offset, end);
         let resp = self
@@ -218,7 +200,6 @@ impl HttpBackend for HttpClient {
 
         let mut request = self.client.put(&url).body(data.clone());
 
-        // Add Content-Range header if offset is provided
         if let Some(start) = offset {
             let end = start + data.len() as u64 - 1;
             let range_value = if let Some(size) = total_size {

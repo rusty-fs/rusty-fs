@@ -1,11 +1,9 @@
-use crate::fs::http_client::HttpBackend;
-use crate::fs::http_client::HttpError;
-use crate::fs::types::FileEntry;
-use crate::fs::path_utils;
-use crate::fs::inode_map::InodeMapper;
-use crate::fs::runtime;
+use crate::fs::http::{HttpBackend, HttpError, FileEntry};
+use crate::fs::utils::path;
+use crate::fs::utils::inode_map::InodeMapper;
+use crate::fs::utils::runtime;
 use crate::fs::config::FuseConfig;
-use crate::fs::file_handle::FhManager;
+use crate::fs::utils::file_handle::FhManager;
 use fuser::{FUSE_ROOT_ID, FileAttr, FileType};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

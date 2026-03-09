@@ -1,7 +1,7 @@
-use crate::fs::http_client::HttpError;
-use crate::fs::types::FileEntry;
-use crate::fs::path_utils;
-use crate::fs::runtime;
+use crate::fs::http::HttpError;
+use crate::fs::http::FileEntry;
+use crate::fs::utils::path;
+use crate::fs::utils::runtime;
 use libc::{O_APPEND, O_EXCL, O_TRUNC};
 use std::ffi::OsStr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -55,7 +55,7 @@ impl RemoteFileSystem {
                 return Err(HttpError::NotFound);
             }
         };
-        let full_path = path_utils::join_path(&parent_path, name_str);
+        let full_path = path::join_path(&parent_path, name_str);
 
         // create a placeholder inode and attr
         let ino = self.get_inode_for_path(&full_path);

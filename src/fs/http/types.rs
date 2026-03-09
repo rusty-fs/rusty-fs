@@ -7,7 +7,7 @@ pub struct FileEntry {
     pub is_dir: bool,
     pub size: u64,
     pub modified: u64,
-    pub permissions:mode_t,
+    pub permissions: mode_t,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

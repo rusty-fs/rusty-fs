@@ -1,20 +1,20 @@
 #[cfg(test)]
 mod tests {
     use super::super::RemoteFileSystem;
-    use crate::fs::http_client::HttpError;
-    use crate::fs::path_utils;
-    use crate::fs::test_utils::FakeBackend;
+    use crate::fs::http::HttpError;
+    use crate::fs::utils::path;
+    use crate::fs::utils::test_utils::FakeBackend;
     use fuser::FUSE_ROOT_ID;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn test_parent_path_cases() {
-        assert_eq!(path_utils::parent_path("/"), "/");
-        assert_eq!(path_utils::parent_path("/foo"), "/");
-        assert_eq!(path_utils::parent_path("/a/b/c"), "/a/b");
-        assert_eq!(path_utils::parent_path("file"), "/");
-        assert_eq!(path_utils::parent_path("/a/"), "/a");
+        assert_eq!(path::parent_path("/"), "/");
+        assert_eq!(path::parent_path("/foo"), "/");
+        assert_eq!(path::parent_path("/a/b/c"), "/a/b");
+        assert_eq!(path::parent_path("file"), "/");
+        assert_eq!(path::parent_path("/a/"), "/a");
     }
 
     #[test]
@@ -35,7 +35,7 @@ mod tests {
 
     #[test]
     fn test_file_entry_to_attr_values() {
-        use crate::fs::types::FileEntry;
+        use crate::fs::http::FileEntry;
         use fuser::FileType;
 
         let backend = Arc::new(FakeBackend::new());

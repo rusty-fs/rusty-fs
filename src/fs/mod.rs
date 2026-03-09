@@ -1,15 +1,11 @@
-pub mod types;
-pub mod http_client;
-pub mod remote_fs;
-pub mod remote_fs_fuse;
-pub mod path_utils;
-pub mod inode_map;
-pub mod runtime;
-pub mod config;
-pub mod file_handle;
-#[cfg(test)]
-pub mod test_utils;
+// Layered module organization
+pub mod http;        // HTTP backend layer
+pub mod utils;       // Shared utilities layer
+pub mod fuse;        // FUSE filesystem trait implementation
+pub mod remote_fs;   // Core filesystem logic
+pub mod config;      // Configuration
 
-pub use http_client::HttpClient;
+// Re-export commonly used types
+pub use http::{HttpClient, HttpBackend, HttpError};
 pub use remote_fs::RemoteFileSystem;
 pub use config::FuseConfig;

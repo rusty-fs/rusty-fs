@@ -1,6 +1,5 @@
 /// Test utilities for FUSE filesystem testing
-use crate::fs::http_client::{HttpBackend, HttpError};
-use crate::fs::types::FileEntry;
+use crate::fs::http::{FileEntry, HttpBackend, HttpError};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

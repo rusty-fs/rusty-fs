@@ -1,7 +1,7 @@
-use crate::fs::http_client::HttpError;
-use crate::fs::types::FileEntry;
-use crate::fs::path_utils;
-use crate::fs::runtime;
+use crate::fs::http::HttpError;
+use crate::fs::http::FileEntry;
+use crate::fs::utils::path;
+use crate::fs::utils::runtime;
 use fuser::FileType;
 use std::ffi::OsStr;
 use tracing::error;
@@ -12,7 +12,7 @@ impl RemoteFileSystem {
     /// Lookup a name under a parent inode and return (inode, FileAttr)
     pub fn lookup(&mut self, parent: u64, name: &str) -> Result<(u64, super::FileAttr), HttpError> {
         let parent_path = self.get_path_for_inode(parent).ok_or(HttpError::NotFound)?;
-        let full_path = path_utils::join_path(&parent_path, name);
+        let full_path = path::join_path(&parent_path, name);
 
         let client = self.http_client.clone();
         let parent_clone = parent_path.clone();
@@ -91,7 +91,7 @@ impl RemoteFileSystem {
             .block_on(async move { client.list_directory(&path_clone).await })?;
         let mut out = Vec::new();
         for entry in entries.into_iter() {
-            let entry_path = path_utils::join_path(&path, &entry.name);
+            let entry_path = path::join_path(&path, &entry.name);
             let entry_inode = self.get_inode_for_path(&entry_path);
             out.push((entry_inode, entry));
         }
@@ -118,7 +118,7 @@ impl RemoteFileSystem {
 
         // ".."
         let path = self.get_path_for_inode(ino).unwrap_or("/".to_string());
-        let parent_path = path_utils::parent_path(&path);
+        let parent_path = path::parent_path(&path);
         let parent_ino = self.get_inode_for_path(&parent_path);
         out.push((parent_ino, FileType::Directory, "..".to_string()));
 
@@ -162,7 +162,7 @@ impl RemoteFileSystem {
                 return Err(HttpError::NotFound);
             }
         };
-        let full_path = path_utils::join_path(&parent_path, name_str);
+        let full_path = path::join_path(&parent_path, name_str);
 
         let client = self.http_client.clone();
         let path_clone = full_path.clone();
@@ -203,7 +203,7 @@ impl RemoteFileSystem {
                 return Err(HttpError::NotFound);
             }
         };
-        let full_path = path_utils::join_path(&parent_path, name_str);
+        let full_path = path::join_path(&parent_path, name_str);
 
         let client = self.http_client.clone();
         let path_clone = full_path.clone();
