@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use fuser::MountOption;
 
-use tracing::{debug, info};
+use tracing::{debug, error, warn, info};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_subscriber::filter::EnvFilter;
 
@@ -32,13 +32,15 @@ fn main() -> anyhow::Result<()> {
     let http_client =  Arc::new(HttpClient::new(server_url.to_string()));
     let fs = RemoteFileSystem::new(http_client.clone());
     
-    let options = vec![
+    let mut options = vec![
         MountOption::RW,               // Read-write
         MountOption::FSName("remote-fs".to_string()),
-        MountOption::CUSTOM("noappledouble".to_string()), // macOS specific option
-        MountOption::CUSTOM("noapplexattr".to_string()), // macOS specific option
-        ];
+    ];
 
+    if cfg!(target_os = "macos") {
+        options.push(MountOption::CUSTOM("noappledouble".to_string()));
+        options.push(MountOption::CUSTOM("noapplexattr".to_string()));
+    }
     fuser::mount2(fs, mountpoint, &options)?;
     
     Ok(())
