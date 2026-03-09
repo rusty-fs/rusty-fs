@@ -1,10 +1,10 @@
 use super::types::{DirectoryListing, FileEntry};
-use reqwest::header::{RANGE, CONTENT_LENGTH, LAST_MODIFIED};
-use reqwest::StatusCode;
-use thiserror::Error;
 use async_trait::async_trait;
-use tracing::{debug, error, warn};
 use libc::{EACCES, EIO, ENOENT};
+use reqwest::StatusCode;
+use reqwest::header::RANGE;
+use thiserror::Error;
+use tracing::{debug, error};
 
 #[derive(Debug, Error)]
 pub enum HttpError {
@@ -47,10 +47,21 @@ impl From<tokio::task::JoinError> for HttpError {
 pub trait HttpBackend: Send + Sync {
     async fn list_directory(&self, path: &str) -> Result<Vec<FileEntry>, HttpError>;
     async fn get_file_metadata(&self, path: &str) -> Result<FileEntry, HttpError>;
-    async fn read_range(&self, path: &str, offset: u64, length: usize) -> Result<Vec<u8>, HttpError>;
+    async fn read_range(
+        &self,
+        path: &str,
+        offset: u64,
+        length: usize,
+    ) -> Result<Vec<u8>, HttpError>;
     async fn create_directory(&self, path: &str) -> Result<(), HttpError>;
     async fn delete_path(&self, path: &str) -> Result<(), HttpError>;
-    async fn put_file_stream(&self, path: &str, data: Vec<u8>) -> Result<(), HttpError>;
+    async fn put_file_stream(
+        &self,
+        path: &str,
+        data: Vec<u8>,
+        offset: Option<u64>,
+        total_size: Option<u64>,
+    ) -> Result<(), HttpError>;
 }
 
 #[derive(Clone)]
@@ -67,7 +78,7 @@ impl HttpClient {
         } else {
             format!("http://{}", base_url)
         };
-        
+
         Self {
             client: reqwest::Client::new(),
             base_url,
@@ -77,7 +88,6 @@ impl HttpClient {
 
 #[async_trait]
 impl HttpBackend for HttpClient {
-
     /// List directory contents at the given path.
     /// Calls GET /list{path} which returns a DirectoryListing JSON object
     /// Example: GET /list/some/directory
@@ -85,28 +95,33 @@ impl HttpBackend for HttpClient {
     async fn list_directory(&self, path: &str) -> Result<Vec<FileEntry>, HttpError> {
         let url = format!("{}/list{}", self.base_url, path);
         debug!("Listing directory at URL: {}", url);
-         
+
         let response = self.client.get(&url).send().await;
 
-        
         match response {
             Ok(response) => {
                 // Get the response text first to debug
                 let response_text = response.text().await?;
-                
+
                 // Check if response is empty
                 if response_text.trim().is_empty() {
                     return Err(HttpError::Other("Empty response from server".into()));
                 }
-                
+
                 // Parse the JSON as DirectoryListing and extract the files array
-                let listing: DirectoryListing = serde_json::from_str(&response_text)
-                    .map_err(|e| HttpError::Other(format!("JSON parse error: {} - Response: {}", e, response_text).into()))?;
-  
+                let listing: DirectoryListing =
+                    serde_json::from_str(&response_text).map_err(|e| {
+                        HttpError::Other(
+                            format!("JSON parse error: {} - Response: {}", e, response_text).into(),
+                        )
+                    })?;
+
                 Ok(listing.files)
-            }            
+            }
             Err(e) => {
-                return Err(HttpError::Other(format!("Failed to send request: {}", e).into()));
+                return Err(HttpError::Other(
+                    format!("Failed to send request: {}", e).into(),
+                ));
             }
         }
     }
@@ -121,10 +136,15 @@ impl HttpBackend for HttpClient {
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
-            return Err(HttpError::Other(format!("meta request failed: {} - {}", status, text).into()));
+            return Err(HttpError::Other(
+                format!("meta request failed: {} - {}", status, text).into(),
+            ));
         }
-        let entry: FileEntry = serde_json::from_str(&text)
-            .map_err(|e| HttpError::Other(format!("JSON parse error for metadata: {} - Response: {}", e, text).into()))?;
+        let entry: FileEntry = serde_json::from_str(&text).map_err(|e| {
+            HttpError::Other(
+                format!("JSON parse error for metadata: {} - Response: {}", e, text).into(),
+            )
+        })?;
         Ok(entry)
     }
 
@@ -133,7 +153,13 @@ impl HttpBackend for HttpClient {
     /// Calls GET /file{path} with Range header.
     /// Example: Range: bytes=0-1023 to read first 1024 bytes
     /// Server must support Range requests.
-    async fn read_range(&self, path: &str, offset: u64, length: usize) -> Result<Vec<u8>, HttpError> {
+    async fn read_range(
+        &self,
+        path: &str,
+        offset: u64,
+        length: usize,
+    ) -> Result<Vec<u8>, HttpError> {
+        debug!("Reading range {}-{} from file {}", offset, offset + length as u64 - 1, path);
         let url = format!("{}/files{}", self.base_url, path);
         // Range: bytes=START-END (END inclusive)
         let end = offset.saturating_add(length as u64).saturating_sub(1);
@@ -147,7 +173,9 @@ impl HttpBackend for HttpClient {
         let status = resp.status();
         if !(status.is_success() || status == StatusCode::PARTIAL_CONTENT) {
             let text = resp.text().await.unwrap_or_default();
-            return Err(HttpError::Other(format!("read_range failed: {} - {}", status, text).into()));
+            return Err(HttpError::Other(
+                format!("read_range failed: {} - {}", status, text).into(),
+            ));
         }
         let bytes = resp.bytes().await?;
         Ok(bytes.to_vec())
@@ -159,7 +187,9 @@ impl HttpBackend for HttpClient {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(HttpError::Other(format!("create_directory failed: {} - {}", status, text).into()));
+            return Err(HttpError::Other(
+                format!("create_directory failed: {} - {}", status, text).into(),
+            ));
         }
         Ok(())
     }
@@ -170,19 +200,46 @@ impl HttpBackend for HttpClient {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(HttpError::Other(format!("delete_path failed: {} - {}", status, text).into()));
+            return Err(HttpError::Other(
+                format!("delete_path failed: {} - {}", status, text).into(),
+            ));
         }
         Ok(())
     }
 
-    async fn put_file_stream(&self, path: &str, data: Vec<u8>) -> Result<(), HttpError> {
+    async fn put_file_stream(
+        &self,
+        path: &str,
+        data: Vec<u8>,
+        offset: Option<u64>,
+        total_size: Option<u64>,
+    ) -> Result<(), HttpError> {
         let url = format!("{}/files{}", self.base_url, path);
-        let resp = self.client.put(&url).body(data).send().await?;
+
+        let mut request = self.client.put(&url).body(data.clone());
+
+        // Add Content-Range header if offset is provided
+        if let Some(start) = offset {
+            let end = start + data.len() as u64 - 1;
+            let range_value = if let Some(size) = total_size {
+                format!("bytes {}-{}/{}", start, end, size)
+            } else {
+                format!("bytes {}-{}/*", start, end)
+            };
+
+            request = request.header("Content-Range", range_value);
+        }
+
+        let resp = request.send().await?;
         let status = resp.status();
+
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(HttpError::Other(format!("put_file_stream failed: {} - {}", status, text).into()));
+            return Err(HttpError::Other(
+                format!("put_file_stream failed: {} - {}", status, text).into(),
+            ));
         }
+
         Ok(())
     }
 }
@@ -190,8 +247,8 @@ impl HttpBackend for HttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use httpmock::MockServer;
     use httpmock::Method::GET;
+    use httpmock::MockServer;
     use serde_json::json;
     use tokio;
 
@@ -208,12 +265,14 @@ mod tests {
         ];
         let body = json!({"files": files, "message": "ok"}).to_string();
 
-        let _mock = server.mock_async(|when, then| {
-            when.method(GET).path("/list/test");
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(body.clone());
-        }).await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/list/test");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(body.clone());
+            })
+            .await;
 
         let client = make_client(&server.base_url());
         let result = client.list_directory("/test").await.unwrap();
@@ -226,12 +285,14 @@ mod tests {
     async fn test_get_file_metadata_success() {
         let server = MockServer::start_async().await;
         let entry = json!({"name": "foo.txt", "is_dir": false, "size": 123, "modified": Some(1), "permissions": Some(0o644)});
-        let _mock = server.mock_async(|when, then| {
-            when.method(GET).path("/meta/foo.txt");
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(entry.to_string());
-        }).await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/meta/foo.txt");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(entry.to_string());
+            })
+            .await;
 
         let client = make_client(&server.base_url());
         let result = client.get_file_metadata("/foo.txt").await.unwrap();
@@ -243,18 +304,17 @@ mod tests {
     async fn test_read_range_success() {
         let server = MockServer::start_async().await;
         let data = b"abcdef";
-        let _mock = server.mock_async(|when, then| {
-            when.method(GET)
-                .path("/file/foo.txt")
-                .header("range", "bytes=2-4");
-            then.status(206)
-                .body(&data[2..=4]);
-        }).await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/file/foo.txt")
+                    .header("range", "bytes=2-4");
+                then.status(206).body(&data[2..=4]);
+            })
+            .await;
 
         let client = make_client(&server.base_url());
         let result = client.read_range("/foo.txt", 2, 3).await.unwrap();
         assert_eq!(result, b"cde");
     }
-
-    
 }

@@ -2,23 +2,21 @@ use crate::fs::http_client::HttpBackend;
 use crate::fs::http_client::HttpError;
 use crate::fs::types::FileEntry;
 use fuser::{FUSE_ROOT_ID, FileAttr, FileType};
-use fuser::{Filesystem, ReplyAttr, ReplyDirectory, ReplyEntry, Request};
-use libc::size_t;
-use libc::{EIO, ENOENT};
-use libc::{O_APPEND, O_EXCL, O_TRUNC};
+use fuser::{Filesystem, ReplyAttr, ReplyDirectory, ReplyEntry, ReplyEmpty, Request};
+use libc::{O_APPEND, O_EXCL, O_TRUNC, ENOENT};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
-use tracing::info;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 const TTL: Duration = Duration::from_secs(1);
 
 struct FhState {
     buf: Vec<u8>,
-    append: bool,
+    dirty: bool,
+    last_write_offset: Option<usize>,
 }
 
 struct FhManager {
@@ -34,14 +32,15 @@ impl FhManager {
         }
     }
 
-    fn alloc_fh(&mut self, append: bool) -> u64 {
+    fn alloc_fh(&mut self) -> u64 {
         let fh = self.next_fh;
         self.next_fh += 1;
         self.fh_map.insert(
             fh,
             FhState {
                 buf: Vec::new(),
-                append,
+                dirty: false,
+                last_write_offset: None,
             },
         );
         fh
@@ -135,7 +134,7 @@ impl RemoteFileSystem {
     }
 
     // Testable helper: lookup a name under a parent inode and return (inode, FileAttr)
-    pub fn lookup_path(&mut self, parent: u64, name: &str) -> Result<(u64, FileAttr), HttpError> {
+    pub fn lookup(&mut self, parent: u64, name: &str) -> Result<(u64, FileAttr), HttpError> {
         let parent_path = self.get_path_for_inode(parent).ok_or(HttpError::NotFound)?;
         let full_path = if parent_path == "/" {
             format!("/{}", name)
@@ -164,8 +163,8 @@ impl RemoteFileSystem {
         Ok((inode, attr))
     }
 
-    // Testable helper: getattr by inode
-    pub fn getattr_path(&mut self, ino: u64) -> Result<FileAttr, HttpError> {
+    // Public helper: getattr by inode
+    pub fn getattr(&mut self, ino: u64) -> Result<FileAttr, HttpError> {
         let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
         // root
         if path == "/" {
@@ -211,8 +210,8 @@ impl RemoteFileSystem {
         Ok(self.file_entry_to_attr(&res, ino))
     }
 
-    // Testable helper: readdir returns (inode, FileEntry) vector
-    pub fn readdir_path(&mut self, ino: u64) -> Result<Vec<(u64, FileEntry)>, HttpError> {
+    // Public helper: readdir returns (inode, FileEntry) vector
+    pub fn readdir(&mut self, ino: u64) -> Result<Vec<(u64, FileEntry)>, HttpError> {
         let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
         let client = self.http_client.clone();
         let path_clone = path.clone();
@@ -238,7 +237,7 @@ impl RemoteFileSystem {
         offset: i64,
     ) -> Result<Vec<(u64, FileType, String)>, HttpError> {
         // get real entries (inode, FileEntry)
-        let entries = self.readdir_path(ino)?;
+        let entries = self.readdir(ino)?;
         let mut out: Vec<(u64, FileType, String)> = Vec::new();
 
         // offset is the fuser offset: 0 means start; this module used current_offset=1.. so adapt
@@ -277,8 +276,8 @@ impl RemoteFileSystem {
         Ok(sliced)
     }
 
-    // Testable helper: open (validate file exists)
-    pub fn open_path(&mut self, ino: u64) -> Result<(), HttpError> {
+    // Public helper: open (validate file exists)
+    pub fn open(&mut self, ino: u64) -> Result<(), HttpError> {
         let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
         let client = self.http_client.clone();
         let path_clone = path.clone();
@@ -287,7 +286,7 @@ impl RemoteFileSystem {
             .map(|_| ())
     }
 
-    // Testable helper: read bytes by inode
+    // Public helper: read bytes by inode
     pub fn read_bytes(&self, ino: u64, offset: u64, size: usize) -> Result<Vec<u8>, HttpError> {
         let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
         let client = self.http_client.clone();
@@ -300,7 +299,7 @@ impl RemoteFileSystem {
         &mut self,
         parent: u64,
         name: &OsStr,
-        mode: u32,
+        _mode: u32,
     ) -> Result<(u64, FileAttr), HttpError> {
         let name_str = match name.to_str() {
             Some(s) => s,
@@ -331,7 +330,7 @@ impl RemoteFileSystem {
             Ok(_) => {
                 // After creation, get attributes
                 let inode = self.get_inode_for_path(&full_path);
-                match self.getattr_path(inode) {
+                match self.getattr(inode) {
                     Ok(attr) => Ok((inode, attr)),
                     Err(e) => {
                         error!("mkdir succeeded but getattr failed: {}", e);
@@ -428,7 +427,7 @@ impl RemoteFileSystem {
 
         if (flags & O_EXCL) != 0 {
             // if file exists, return EEXIST
-            if let Ok((_, _)) = self.lookup_path(parent, name_str) {
+            if let Ok((_, _)) = self.lookup(parent, name_str) {
                 return Err(HttpError::AlreadyExists);
             }
         }
@@ -437,7 +436,7 @@ impl RemoteFileSystem {
 
         // Decide creation/truncation/prefetch behavior
         let truncate = (flags & O_TRUNC) != 0;
-        let append = (flags & O_APPEND) != 0;
+        let _append = (flags & O_APPEND) != 0;
         let client = self.http_client.clone();
         let path_clone = full_path.clone();
 
@@ -453,10 +452,11 @@ impl RemoteFileSystem {
                     // truncate on server now
                     let client2 = self.http_client.clone();
                     let path2 = full_path.clone();
-                    if let Err(e) = self
-                        .runtime
-                        .block_on(async move { client2.put_file_stream(&path2, Vec::new()).await })
-                    {
+                    if let Err(e) = self.runtime.block_on(async move {
+                        client2
+                            .put_file_stream(&path2, Vec::new(), None, None)
+                            .await
+                    }) {
                         error!("create (truncate) failed: {}", e);
                         return Err(e);
                     }
@@ -470,7 +470,7 @@ impl RemoteFileSystem {
                         .block_on(async move { client2.read_range(&path2, 0, size).await })
                     {
                         Ok(data) => {
-                            let fh = self.fh_manager.alloc_fh(append);
+                            let fh = self.fh_manager.alloc_fh();
                             if let Some(state) = self.fh_manager.get_fh_state(fh) {
                                 state.buf = data;
                             }
@@ -488,10 +488,11 @@ impl RemoteFileSystem {
                 // file doesn't exist -> create empty file on server now (or leave lazy)
                 let client2 = self.http_client.clone();
                 let path2 = full_path.clone();
-                if let Err(e) = self
-                    .runtime
-                    .block_on(async move { client2.put_file_stream(&path2, Vec::new()).await })
-                {
+                if let Err(e) = self.runtime.block_on(async move {
+                    client2
+                        .put_file_stream(&path2, Vec::new(), None, None)
+                        .await
+                }) {
                     error!("create (new file) failed: {}", e);
                     return Err(e);
                 }
@@ -499,57 +500,138 @@ impl RemoteFileSystem {
         }
 
         // default path: alloc fh with empty buffer (already handled above in some branches)
-        let fh = self.fh_manager.alloc_fh(append);
+        let fh = self.fh_manager.alloc_fh();
         return Ok((TTL, attr, 0, fh, 0));
     }
 
+    // Forse il fh che arriva non corrisponde a nessuno esistente
     pub fn write_bytes(
         &mut self,
         ino: u64,
         fh: u64,
         offset: i64,
         data: &[u8],
-        write_flags: u32,
-        flags: i32,
-        lock_owner: Option<u64>,
-    ) -> Result<(u32), HttpError> {
+        _write_flags: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+    ) -> Result<u32, HttpError> {
+        match self.fh_manager.get_fh_state(fh) {
+            Some(state) => {
+                let off = offset as usize;
+
+                // Expand buffer if needed
+                if state.buf.len() < off + data.len() {
+                    state.buf.resize(off + data.len(), 0);
+                }
+
+                // Write to local buffer
+                state.buf[off..off + data.len()].copy_from_slice(data);
+
+                // Mark as dirty
+                state.dirty = true;
+                state.last_write_offset = Some(off);
+
+                const MAX_BUFFER_SIZE: usize = 4 * 1024 * 1024; // 4MB threshold
+                if state.buf.len() > MAX_BUFFER_SIZE {
+                    let path = match self.get_path_for_inode(ino) {
+                        Some(p) => p,
+                        None => {
+                            error!("write failed: inode {} not found", ino);
+                            return Err(HttpError::NotFound);
+                        }
+                    };
+
+                    let data_to_flush = {
+                        let state_ref = self.fh_manager.get_fh_state(fh).unwrap();
+                        let taken = std::mem::take(&mut state_ref.buf);
+                        state_ref.dirty = false;
+                        state_ref.last_write_offset = None;
+                        taken
+                    };
+                 
+                    self.flush_buffer_owned(path, data_to_flush)?;
+                }
+                Ok(data.len() as u32)
+            }
+            None => Err(HttpError::Other("invalid file handle".into())),
+        }
+    }
+
+    fn flush_buffer_owned(&self, path: String, data: Vec<u8>) -> Result<(), HttpError> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        let client = self.http_client.clone();
+        let path_clone = path.clone();
+        // opzionale: passare la dimensione totale
+        let total_size = Some(data.len() as u64);
+
+        let result = self
+            .runtime
+            .block_on(async move {
+                client
+                    .put_file_stream(&path_clone, data, None, total_size)
+                    .await
+            });
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                error!("flush failed during upload: {}", e);
+                Err(e)
+            }
+        }
+    }
+
+    pub fn setattr(
+        &mut self,
+        ino: u64,
+        _mode: Option<u32>,
+        _uid: Option<u32>,
+        _gid: Option<u32>,
+        size: Option<u64>,
+    ) -> Result<FileAttr, HttpError> {
+        // For now we just support size changes (truncate)
         let path = match self.get_path_for_inode(ino) {
             Some(p) => p,
             None => {
-                error!("write failed: inode {} not found", ino);
+                error!("setattr failed: inode {} not found", ino);
                 return Err(HttpError::NotFound);
             }
         };
 
-        match self.fh_manager.get_fh_state(fh) {
-            Some(state) => {
-                let off = offset as usize;
-                // Ensure buffer is large enough
-                if state.buf.len() < off + data.len() {
-                    state.buf.resize(off + data.len(), 0);
-                }
-                // Write data into buffer
-                state.buf[off..off + data.len()].copy_from_slice(data);
-                let client = self.http_client.clone();
-                let path_clone = path.clone();
-                let data_clone = state.buf.clone();
-                let result = self
-                    .runtime
-                    .block_on(async move { client.put_file_stream(&path_clone, data_clone).await });
-                match result {
-                    Ok(_) => {
-                        Ok(data.len() as u32)
-                    }
-                    Err(e) => {
-                        error!("write failed during upload: {}", e);
-                        return Err(e);
-                    }
-                }
+        if let Some(new_size) = size {
+            debug!("truncating file {} to size {}", path, new_size);
+
+            let current_data;
+            if new_size == 0 {
+                current_data = Vec::new();
+            } else {
+                // Read existing data up to new_size
+                current_data = self.read_bytes(ino, 0, new_size as usize)?;
             }
-            None => {
-                return Err(HttpError::Other("invalid file handle".into()));
+
+            let client = self.http_client.clone();
+            let path_clone = path.clone();
+            let data_clone = current_data;
+
+            match self.runtime.block_on(async move {
+                client
+                    .put_file_stream(&path_clone, data_clone, None, None)
+                    .await
+            }) {
+                Ok(_) => {
+                    // After truncation, get updated attributes
+                    return self.getattr(ino);
+                }
+                Err(e) => {
+                    error!("setattr failed during truncate upload: {}", e);
+                    return Err(e);
+                }
             }
         }
+        Ok(self.getattr(ino)?)
     }
 }
 
@@ -565,21 +647,21 @@ impl Filesystem for RemoteFileSystem {
                 return;
             }
         };
-        match self.lookup_path(parent, name_str) {
-            Ok((inode, attr)) => {
+        match self.lookup(parent, name_str) {
+            Ok((_, attr)) => {
                 reply.entry(&TTL, &attr, 0);
             }
             Err(e) => {
-                error!("lookup failed: {}", e);
+                error!("lookup failed: {:#?} {}", name, e);
                 reply.error(e.to_errno());
             }
         }
     }
 
-    // Use getattr_path helper
+    // Use getattr helper
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        debug!("getattr: ino={}", ino);
-        match self.getattr_path(ino) {
+        // debug!("getattr: ino={}", ino);
+        match self.getattr(ino) {
             Ok(attr) => {
                 reply.attr(&TTL, &attr);
             }
@@ -590,7 +672,7 @@ impl Filesystem for RemoteFileSystem {
         }
     }
 
-    // Use readdir_path helper
+    // Use readdir helper
     fn readdir(
         &mut self,
         _req: &Request,
@@ -621,7 +703,7 @@ impl Filesystem for RemoteFileSystem {
     // Use open_path helper
     fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
         debug!("open called for ino {}", ino);
-        match self.open_path(ino) {
+        match self.open(ino) {
             Ok(_) => {
                 let fh = 0; // file handle, not used here
                 reply.opened(fh, 0);
@@ -641,8 +723,8 @@ impl Filesystem for RemoteFileSystem {
         fh: u64,
         offset: i64,
         size: u32,
-        flags: i32,
-        lock_owner: Option<u64>,
+        _flags: i32,
+        _lock_owner: Option<u64>,
         reply: fuser::ReplyData,
     ) {
         debug!(
@@ -674,7 +756,7 @@ impl Filesystem for RemoteFileSystem {
         // Calculate actual permissions
         let actual_mode = mode & !umask;
         match self.create_directory(parent, name, actual_mode) {
-            Ok((_inode, attr)) => {
+            Ok((_, attr)) => {
                 reply.entry(&TTL, &attr, 0);
             }
             Err(e) => {
@@ -770,26 +852,78 @@ impl Filesystem for RemoteFileSystem {
         &mut self,
         _req: &Request<'_>,
         ino: u64,
-        mode: Option<u32>,
-        uid: Option<u32>,
-        gid: Option<u32>,
+        _mode: Option<u32>,
+        _uid: Option<u32>,
+        _gid: Option<u32>,
         size: Option<u64>,
         _atime: Option<fuser::TimeOrNow>,
         _mtime: Option<fuser::TimeOrNow>,
         _ctime: Option<SystemTime>,
-        fh: Option<u64>,
+        _fh: Option<u64>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
         _bkuptime: Option<SystemTime>,
-        flags: Option<u32>,
+        _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        debug!(
-            "setattr called for ino {} with mode {:?}, uid {:?}, gid {:?}, size {:?}, flags {:?}",
-            ino, mode, uid, gid, size, flags
-        );
-        // Return error for unsupported operations
-        reply.error(libc::ENOSYS);
+        debug!("setattr called for ino {} with size {:?}", ino, size);
+
+        match self.setattr(ino, _mode, _uid, _gid, size) {
+            Ok(attr) => {
+                reply.attr(&TTL, &attr);
+            }
+            Err(e) => {
+                error!("setattr failed: {}", e);
+                reply.error(e.to_errno());
+            }
+        }
+    }
+
+    fn release(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        fh: u64,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        _flush: bool,
+        reply: ReplyEmpty,
+    ) {
+        debug!("release called for fh {}", fh);
+        
+        // Extract data to flush before releasing the mutable borrow
+        let data_to_flush = {
+            if let Some(state) = self.fh_manager.get_fh_state(fh) {
+                if state.dirty && !state.buf.is_empty() {
+                    Some(state.buf.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        
+        // Now flush if we have data
+        if let Some(data) = data_to_flush {
+            if let Some(path) = self.get_path_for_inode(ino) {
+                let client = self.http_client.clone();
+                match self.runtime.block_on(async move {
+                    client.put_file_stream(&path, data, None, None).await
+                }) {
+                    Ok(_) => {
+                        debug!("release: flushed buffer for fh {}", fh);
+                    }
+                    Err(e) => {
+                        error!("release: failed to flush buffer for fh {}: {}", fh, e);
+                    }
+                }
+            }
+        }
+        
+        // Release the file handle
+        self.fh_manager.release_fh(fh);
+        reply.ok();
     }
 }
 
@@ -962,7 +1096,13 @@ mod tests {
             Ok(())
         }
 
-        async fn put_file_stream(&self, path: &str, data: Vec<u8>) -> Result<(), HttpError> {
+        async fn put_file_stream(
+            &self,
+            path: &str,
+            data: Vec<u8>,
+            _offset: Option<u64>,
+            _total_size: Option<u64>,
+        ) -> Result<(), HttpError> {
             let mut contents = self.contents.lock().unwrap();
             contents.insert(path.to_string(), data.clone());
             let mut metadata = self.metadata.lock().unwrap();
@@ -1053,7 +1193,7 @@ mod tests {
 
         // root readdir
         let entries = fs
-            .readdir_path(FUSE_ROOT_ID)
+            .readdir(FUSE_ROOT_ID)
             .expect("readdir should succeed");
         assert_eq!(entries.len(), 2);
         let names: Vec<String> = entries.iter().map(|(_, e)| e.name.clone()).collect();
@@ -1068,10 +1208,10 @@ mod tests {
 
         // open existing file
         let ino = fs.get_inode_for_path("/f.txt");
-        assert!(fs.open_path(ino).is_ok());
+        assert!(fs.open(ino).is_ok());
         // open non-existing file
         let fake_ino = fs.get_inode_for_path("/nonexistent.txt");
-        assert!(matches!(fs.open_path(fake_ino), Err(HttpError::NotFound)));
+        assert!(matches!(fs.open(fake_ino), Err(HttpError::NotFound)));
         // read existing file
         let data = fs.read_bytes(ino, 0, 10).expect("read should succeed");
         assert_eq!(data, b"0123456789".to_vec());
@@ -1126,7 +1266,7 @@ mod tests {
 
         // lookup existing file
         let (ino, attr) = fs
-            .lookup_path(FUSE_ROOT_ID, "f.txt")
+            .lookup(FUSE_ROOT_ID, "f.txt")
             .expect("lookup should succeed");
         assert_eq!(attr.kind, FileType::RegularFile);
         assert_eq!(attr.size, 10);
@@ -1134,14 +1274,14 @@ mod tests {
 
         // lookup existing directory
         let (d_ino, d_attr) = fs
-            .lookup_path(FUSE_ROOT_ID, "dir")
+            .lookup(FUSE_ROOT_ID, "dir")
             .expect("lookup should succeed");
         assert_eq!(d_attr.kind, FileType::Directory);
         assert_eq!(fs.get_path_for_inode(d_ino).unwrap(), "/dir");
 
         // lookup non-existing entry
         assert!(matches!(
-            fs.lookup_path(FUSE_ROOT_ID, "nonexistent"),
+            fs.lookup(FUSE_ROOT_ID, "nonexistent"),
             Err(HttpError::NotFound)
         ));
     }
@@ -1153,25 +1293,25 @@ mod tests {
 
         // getattr root
         let root_attr = fs
-            .getattr_path(FUSE_ROOT_ID)
+            .getattr(FUSE_ROOT_ID)
             .expect("getattr should succeed");
         assert_eq!(root_attr.kind, FileType::Directory);
 
         // getattr existing file
         let f_ino = fs.get_inode_for_path("/f.txt");
-        let f_attr = fs.getattr_path(f_ino).expect("getattr should succeed");
+        let f_attr = fs.getattr(f_ino).expect("getattr should succeed");
         assert_eq!(f_attr.kind, FileType::RegularFile);
         assert_eq!(f_attr.size, 10);
 
         // getattr existing directory
         let d_ino = fs.get_inode_for_path("/dir");
-        let d_attr = fs.getattr_path(d_ino).expect("getattr should succeed");
+        let d_attr = fs.getattr(d_ino).expect("getattr should succeed");
         assert_eq!(d_attr.kind, FileType::Directory);
 
         // getattr non-existing inode
         let fake_ino = 9999;
         assert!(matches!(
-            fs.getattr_path(fake_ino),
+            fs.getattr(fake_ino),
             Err(HttpError::NotFound)
         ));
     }
