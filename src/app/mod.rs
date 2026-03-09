@@ -1,6 +1,8 @@
 use axum::{routing::{delete, get, post, put}, Extension, Router};
 use crate::handlers::{list, meta, read, mkdir, delete_path, put_file};
 use std::sync::Arc;
+use tower_http::trace::{self, TraceLayer};
+use tracing::Level;
 
 pub fn build_app(shared_base_dir: Arc<String>) -> Router {
     Router::new()
@@ -12,5 +14,11 @@ pub fn build_app(shared_base_dir: Arc<String>) -> Router {
         .route("/mkdir/{*file_path}", post(mkdir))
         .route("/files/{*file_path}", delete(delete_path))
         .route("/files/{*file_path}", put(put_file))
-        .layer(Extension(shared_base_dir))
+        .layer(Extension(shared_base_dir))        
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(trace::DefaultMakeSpan::new().level(Level::INFO))
+                .on_request(trace::DefaultOnRequest::new().level(Level::DEBUG))
+                .on_response(trace::DefaultOnResponse::new().level(Level::INFO))
+        )
 }
