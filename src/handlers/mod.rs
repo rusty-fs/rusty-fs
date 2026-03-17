@@ -1,16 +1,27 @@
-use axum::http::HeaderMap;
-use axum::{Extension, Json, extract::Path, http::StatusCode};
+use axum::{
+    body::Body,
+    extract::{Extension, Path},
+    http::{
+        header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE},
+        HeaderMap, HeaderValue, StatusCode,
+    },
+    response::{IntoResponse, Response},
+    Json,
+};
+use bytes::Bytes;
 use serde::Serialize;
 use serde_json::json;
 use std::fs;
 use std::io::{Seek, SeekFrom, Write};
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
-use std::{
-    os::unix::{fs::PermissionsExt, raw::mode_t},
-    path::PathBuf,
-    sync::Arc,
-};
-use tracing::{error, info};
+use tokio::fs::File as TokioFile;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio_util::io::ReaderStream;
+use tracing::{debug, error, info};
 
 pub async fn list(
     requested_path: Option<Path<String>>,
@@ -18,7 +29,6 @@ pub async fn list(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let requested_path = requested_path.map(|p| p.0).unwrap_or_default();
 
-    // Reject obvious traversal attempts
     if requested_path.contains("..") {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -29,8 +39,6 @@ pub async fn list(
     } else {
         PathBuf::from(base_dir.trim_end_matches('/')).join(&requested)
     };
-
-    // info!("Listing files in: {} -> {:?}", requested, full_path);
 
     let entries = fs::read_dir(&full_path)
         .map_err(|e| {
@@ -60,7 +68,7 @@ pub async fn list(
                             is_dir,
                             size,
                             modified: modified_time,
-                            permissions: Some(permissions.mode() as mode_t),
+                            permissions: Some(permissions.mode()),
                         });
                     }
                     Err(e) => {
@@ -118,7 +126,7 @@ pub async fn meta(
                 is_dir,
                 size,
                 modified: modified_time,
-                permissions: Some(permissions.mode() as mode_t),
+                permissions: Some(permissions.mode()),
             };
 
             Ok(Json(serde_json::to_value(&entry).unwrap()))
@@ -130,10 +138,106 @@ pub async fn meta(
     }
 }
 
+fn parse_range_header(
+    range_hdr: Option<&HeaderValue>,
+) -> Result<Option<(u64, Option<u64>)>, StatusCode> {
+    let hv = match range_hdr {
+        Some(h) => h,
+        None => return Ok(None),
+    };
+    let s = hv.to_str().map_err(|_| StatusCode::BAD_REQUEST)?;
+    if !s.starts_with("bytes=") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let spec = &s["bytes=".len()..];
+    if spec.contains(',') {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let mut parts = spec.splitn(2, '-');
+    let start_str = parts.next().unwrap_or("");
+    let end_str = parts.next().unwrap_or("");
+    if start_str.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let start = u64::from_str(start_str).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let end_opt = if end_str.is_empty() {
+        None
+    } else {
+        Some(u64::from_str(end_str).map_err(|_| StatusCode::BAD_REQUEST)?)
+    };
+    Ok(Some((start, end_opt)))
+}
+
+async fn stream_file(
+    full_path: PathBuf,
+    range_header: Option<&HeaderValue>,
+) -> Result<Response, StatusCode> {
+    let meta = tokio::fs::metadata(&full_path)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    let file_size = meta.len();
+
+    let file = TokioFile::open(&full_path)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    let range = parse_range_header(range_header)?;
+    if range.is_none() {
+        let stream = ReaderStream::new(file);
+        let mut resp_headers = HeaderMap::new();
+        resp_headers.insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+        resp_headers.insert(
+            CONTENT_LENGTH,
+            HeaderValue::from_str(&file_size.to_string())
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        );
+        resp_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+        
+        // Return a concrete Response to avoid Rust 2024 impl Trait lifetime captures
+        return Ok((StatusCode::OK, resp_headers, Body::from_stream(stream)).into_response());
+    }
+
+    let (start, end_opt) = range.unwrap();
+    let end = end_opt.unwrap_or(file_size.saturating_sub(1));
+    if start >= file_size || start > end {
+        return Err(StatusCode::RANGE_NOT_SATISFIABLE);
+    }
+    let read_len = end.saturating_sub(start).saturating_add(1);
+
+    let mut file = file;
+    file.seek(std::io::SeekFrom::Start(start))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let reader = file.take(read_len);
+    let stream = ReaderStream::new(reader);
+
+    let content_range = format!("bytes {}-{}/{}", start, end, file_size);
+    let mut resp_headers = HeaderMap::new();
+    resp_headers.insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    resp_headers.insert(
+        CONTENT_RANGE,
+        HeaderValue::from_str(&content_range).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    );
+    resp_headers.insert(
+        CONTENT_LENGTH,
+        HeaderValue::from_str(&read_len.to_string())
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    );
+    resp_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+
+    Ok((
+        StatusCode::PARTIAL_CONTENT,
+        resp_headers,
+        Body::from_stream(stream),
+    ).into_response())
+}
+
 pub async fn read(
     file_path: Path<String>,
     Extension(base_dir): Extension<Arc<String>>,
-) -> Result<(StatusCode, Vec<u8>), StatusCode> {
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
     let requested_raw = file_path.0;
     if requested_raw.contains("..") {
         return Err(StatusCode::BAD_REQUEST);
@@ -148,13 +252,8 @@ pub async fn read(
 
     info!("Reading file: {} -> {:?}", requested, full_path);
 
-    match fs::read(&full_path) {
-        Ok(content) => Ok((StatusCode::OK, content)),
-        Err(e) => {
-            error!("Failed to read file {:?}: {}", full_path, e);
-            Err(StatusCode::NOT_FOUND)
-        }
-    }
+    // Pass only the relevant header, not the whole map
+    stream_file(full_path, headers.get("range")).await
 }
 
 pub async fn mkdir(
@@ -228,11 +327,12 @@ pub async fn delete_path(
         }
     }
 }
+
 pub async fn put_file(
     file_path: Path<String>,
     Extension(base_dir): Extension<Arc<String>>,
     headers: HeaderMap,
-    body: axum::body::Bytes,
+    body: Bytes,
 ) -> Result<StatusCode, StatusCode> {
     let requested_raw = file_path.0;
     if requested_raw.contains("..") {
@@ -247,9 +347,9 @@ pub async fn put_file(
     let full_path = PathBuf::from(base_dir.trim_end_matches('/')).join(&requested);
     info!("Writing file: {} -> {:?}", requested, full_path);
 
-    tracing::debug!("Headers: {:?}", headers);
-    tracing::debug!("Content-Range header: {:?}", headers.get("content-range"));
-    tracing::debug!("Body length: {}", body.len());
+    debug!("Headers: {:?}", headers);
+    debug!("Content-Range header: {:?}", headers.get("content-range"));
+    debug!("Body length: {}", body.len());
 
     if let Some(parent) = full_path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
@@ -269,7 +369,6 @@ pub async fn put_file(
 
     if should_truncate {
         info!("Full write detected, truncating file if it exists");
-        // Full replacement: use temporary file for atomicity
         let mut tmp_path = full_path.clone();
         tmp_path.set_extension(format!(
             "{}.filer_tmp",
@@ -293,7 +392,6 @@ pub async fn put_file(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     } else {
         info!("Partial write detected at offset {}", offset);
-        // Partial write: write directly to target file
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
@@ -316,9 +414,6 @@ pub async fn put_file(
 }
 
 fn parse_content_range(value: &str) -> Result<(u64, bool), ()> {
-    // "bytes 1024-2047/5000" -> offset=1024, truncate=false
-    // Assenza header -> offset=0, truncate=true
-
     if !value.starts_with("bytes ") {
         return Err(());
     }
@@ -342,6 +437,6 @@ struct FileEntry {
     name: String,
     is_dir: bool,
     size: u64,
-    modified: Option<u64>,       // Unix timestamp in seconds
-    permissions: Option<mode_t>, // File permissions
+    modified: Option<u64>,
+    permissions: Option<u32>,
 }
