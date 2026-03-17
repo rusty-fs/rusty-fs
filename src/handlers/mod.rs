@@ -360,14 +360,27 @@ pub async fn put_file(
 
     let existed = full_path.exists();
 
-    let (offset, should_truncate) = if let Some(range) = headers.get("content-range") {
+    let (offset, should_truncate, total_size) = if let Some(range) = headers.get("content-range") {
         parse_content_range(range.to_str().map_err(|_| StatusCode::BAD_REQUEST)?)
             .map_err(|_| StatusCode::BAD_REQUEST)?
     } else {
-        (0, true)
+        (0, true, None)
     };
 
-    if should_truncate {
+    // Handle empty body with total_size: this is a finalize operation
+    if body.is_empty() && total_size.is_some() {
+        info!("Finalize request detected, truncating file to size {}", total_size.unwrap());
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&full_path)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        
+        f.set_len(total_size.unwrap())
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        f.sync_all()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    } else if should_truncate {
         info!("Full write detected, truncating file if it exists");
         let mut tmp_path = full_path.clone();
         tmp_path.set_extension(format!(
@@ -413,7 +426,7 @@ pub async fn put_file(
     }
 }
 
-fn parse_content_range(value: &str) -> Result<(u64, bool), ()> {
+fn parse_content_range(value: &str) -> Result<(u64, bool, Option<u64>), ()> {
     if !value.starts_with("bytes ") {
         return Err(());
     }
@@ -429,7 +442,12 @@ fn parse_content_range(value: &str) -> Result<(u64, bool), ()> {
     }
 
     let start: u64 = range_parts[0].parse().map_err(|_| ())?;
-    Ok((start, false))
+    let total_size: Option<u64> = if parts[1] == "*" {
+        None
+    } else {
+        Some(parts[1].parse().map_err(|_| ())?)
+    };
+    Ok((start, false, total_size))
 }
 
 #[derive(Serialize)]

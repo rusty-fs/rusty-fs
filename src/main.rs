@@ -5,12 +5,15 @@ use std::sync::Arc;
 
 use crate::app::build_app;
 use tracing::{debug, error};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[tokio::main]
 async fn main() {
     // initialize tracing
-    tracing_subscriber::registry().with(fmt::layer()).init();
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::from_default_env())
+        .init();
 
     // read base directory from environment
     let base_dir: String = if let Ok(val) = std::env::var("BASE_DIR") {
