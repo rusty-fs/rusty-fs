@@ -142,7 +142,12 @@ impl HttpBackend for HttpClient {
         offset: u64,
         length: usize,
     ) -> Result<Vec<u8>, HttpError> {
-        debug!("Reading range {}-{} from file {}", offset, offset + length as u64 - 1, path);
+        debug!(
+            "Reading range {}-{} from file {}",
+            offset,
+            offset.saturating_add(length as u64).saturating_sub(1),
+            path
+        );
         let url = format!("{}/files{}", self.base_url, path);
         let end = offset.saturating_add(length as u64).saturating_sub(1);
         let range_header = format!("bytes={}-{}", offset, end);
@@ -201,7 +206,8 @@ impl HttpBackend for HttpClient {
         let mut request = self.client.put(&url).body(data.clone());
 
         if let Some(start) = offset {
-            let end = start + data.len() as u64 - 1;
+            // Use saturating arithmetic to prevent underflow
+            let end = start.saturating_add(data.len() as u64).saturating_sub(1);
             let range_value = if let Some(size) = total_size {
                 format!("bytes {}-{}/{}", start, end, size)
             } else {
@@ -288,7 +294,7 @@ mod tests {
         let _mock = server
             .mock_async(|when, then| {
                 when.method(GET)
-                    .path("/file/foo.txt")
+                    .path("/files/foo.txt")
                     .header("range", "bytes=2-4");
                 then.status(206).body(&data[2..=4]);
             })

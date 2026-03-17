@@ -40,15 +40,14 @@ impl RemoteFileSystem {
         let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
         // root
         if path == "/" {
+            // Use a safe default timestamp (~2001-09-09)
+            let safe_timestamp = 1_000_000_000;
             let entry = FileEntry {
                 name: "".to_string(),
                 is_dir: true,
                 size: 0,
-                modified: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-                permissions: 0o755,
+                modified: Some(safe_timestamp),
+                permissions: Some(0o755),
             };
             return Ok(self.file_entry_to_attr(&entry, ino));
         }
@@ -66,18 +65,15 @@ impl RemoteFileSystem {
                             name: path_clone.split('/').last().unwrap_or("").to_string(),
                             is_dir: true,
                             size: 0,
-                            modified: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs(),
-                            permissions: 0o755,
+                            modified: Some(1_000_000_000),
+                            permissions: Some(0o755),
                         })
                     } else {
                         Err(HttpError::NotFound)
                     }
                 }
             }
-        })?;
+        })?;;
 
         Ok(self.file_entry_to_attr(&res, ino))
     }

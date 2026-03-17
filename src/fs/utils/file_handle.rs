@@ -1,11 +1,16 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 
 /// Represents the state of an open file handle
 #[derive(Debug, Clone)]
 pub struct FhState {
+    /// Local buffer for accumulated writes (max 1MB per chunk)
     pub buf: Vec<u8>,
+    /// Current offset within the buffer
+    pub buf_offset: u64,
+    /// Whether this file has been modified
     pub dirty: bool,
-    pub last_write_offset: Option<usize>,
+    /// File size known from metadata (None if new file)
+    pub file_size: Option<u64>,
 }
 
 /// Manages file handles and their associated state
@@ -30,9 +35,10 @@ impl FhManager {
         self.fh_map.insert(
             fh,
             FhState {
-                buf: Vec::new(),
+                buf: Vec::with_capacity(1024 * 1024), // 1MB capacity
+                buf_offset: 0,
                 dirty: false,
-                last_write_offset: None,
+                file_size: None,
             },
         );
         fh
@@ -78,6 +84,8 @@ mod tests {
         let state = state.unwrap();
         assert_eq!(state.buf.len(), 0);
         assert!(!state.dirty);
+        assert_eq!(state.buf_offset, 0);
+        assert!(state.file_size.is_none());
     }
 
     #[test]

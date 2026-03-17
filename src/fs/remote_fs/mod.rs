@@ -47,8 +47,26 @@ impl RemoteFileSystem {
     }
 
     pub fn file_entry_to_attr(&self, entry: &FileEntry, inode: u64) -> FileAttr {
-        let modified = UNIX_EPOCH + Duration::from_secs(entry.modified);
-        let perm = entry.permissions as u16;
+        // Handle None modified timestamp safely
+        // Use a safe default: Unix epoch (1970-01-01) or clamp invalid timestamps
+        let modified = match entry.modified {
+            Some(secs) => {
+                // Only allow timestamps between 1970 (0) and year 2100 (~4102444800)
+                if secs == 0 || secs > 4102444800 {
+                    // Use a safe default timestamp instead of now()
+                    // This prevents fuser from trying to calculate with extremely large/small values
+                    UNIX_EPOCH + Duration::from_secs(1_000_000_000) // ~2001-09-09
+                } else {
+                    UNIX_EPOCH + Duration::from_secs(secs)
+                }
+            }
+            None => {
+                // Use a safe default instead of now() to avoid potential overflow
+                UNIX_EPOCH + Duration::from_secs(1_000_000_000) // ~2001-09-09
+            }
+        };
+        
+        let perm = entry.permissions.unwrap_or(0o644) as u16;
         FileAttr {
             ino: inode,
             size: entry.size,

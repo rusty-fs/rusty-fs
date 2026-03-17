@@ -45,11 +45,11 @@ mod tests {
             name: "f.txt".into(),
             is_dir: false,
             size: 1234,
-            modified: SystemTime::now()
+            modified: Some(SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_secs(),
-            permissions: 0o644,
+                .as_secs()),
+            permissions: Some(0o644),
         };
         let attr = fs.file_entry_to_attr(&entry_file, 42);
         assert_eq!(attr.ino, 42);
@@ -61,11 +61,11 @@ mod tests {
             name: "d".into(),
             is_dir: true,
             size: 0,
-            modified: SystemTime::now()
+            modified: Some(SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_secs(),
-            permissions: 0o755,
+                .as_secs()),
+            permissions: Some(0o755),
         };
         let attrd = fs.file_entry_to_attr(&entry_dir, 43);
         assert_eq!(attrd.kind, FileType::Directory);

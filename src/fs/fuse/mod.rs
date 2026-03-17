@@ -1,8 +1,8 @@
 // FUSE trait implementation for RemoteFileSystem
 
 use crate::fs::remote_fs::RemoteFileSystem;
-use fuser::{Filesystem, ReplyAttr, ReplyDirectory, ReplyEntry, ReplyEmpty, Request};
-use libc::ENOENT;
+use fuser::{Filesystem, ReplyAttr, ReplyDirectory, ReplyEntry, ReplyEmpty, ReplyXattr, ReplyStatfs, Request};
+use libc::{ENOENT, EOPNOTSUPP};
 use std::ffi::OsStr;
 use std::time::SystemTime;
 use tracing::{debug, error};
@@ -236,6 +236,58 @@ impl Filesystem for RemoteFileSystem {
         }
     }
 
+    fn flush(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        fh: u64,
+        _lock_owner: u64,
+        reply: ReplyEmpty,
+    ) {
+        debug!("flush called for ino {} fh {}", ino, fh);
+        
+        // Flush any buffered data for this file handle
+        let data_to_flush = {
+            if let Some(state) = self.fh_manager.get_fh_state(fh) {
+                if state.dirty && !state.buf.is_empty() {
+                    Some((state.buf.clone(), state.buf_offset, state.file_size))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        
+        if let Some((data, offset, file_size)) = data_to_flush {
+            if let Some(path) = self.get_path_for_inode(ino) {
+                let client = self.http_client.clone();
+                match crate::fs::utils::runtime().block_on(async move {
+                    client.put_file_stream(&path, data, Some(offset), file_size).await
+                }) {
+                    Ok(_) => {
+                        debug!("flush: flushed buffer for fh {} at offset {}", fh, offset);
+                        // Clear the buffer after successful flush
+                        if let Some(state) = self.fh_manager.get_fh_state(fh) {
+                            state.buf.clear();
+                            state.dirty = false;
+                        }
+                        reply.ok();
+                    }
+                    Err(e) => {
+                        error!("flush: failed to flush buffer for fh {}: {}", fh, e);
+                        reply.error(e.to_errno());
+                    }
+                }
+            } else {
+                reply.ok(); // No path found, silently succeed
+            }
+        } else {
+            // Nothing to flush, just succeed
+            reply.ok();
+        }
+    }
+
     fn release(
         &mut self,
         _req: &Request<'_>,
@@ -248,26 +300,31 @@ impl Filesystem for RemoteFileSystem {
     ) {
         debug!("release called for fh {}", fh);
         
-        let data_to_flush = {
+        let (data_to_flush, final_file_size) = {
             if let Some(state) = self.fh_manager.get_fh_state(fh) {
-                if state.dirty && !state.buf.is_empty() {
+                // Flush any remaining buffered data
+                let data = if !state.buf.is_empty() {
                     Some(state.buf.clone())
                 } else {
                     None
-                }
+                };
+                let offset = state.buf_offset;
+                let file_size = state.file_size;
+                (data.map(|d| (d, offset)), file_size)
             } else {
-                None
+                (None, None)
             }
         };
         
-        if let Some(data) = data_to_flush {
+        if let Some((data, offset)) = data_to_flush {
             if let Some(path) = self.get_path_for_inode(ino) {
                 let client = self.http_client.clone();
+                // Final flush: include the file_size to tell server the final size
                 match crate::fs::utils::runtime().block_on(async move {
-                    client.put_file_stream(&path, data, None, None).await
+                    client.put_file_stream(&path, data, Some(offset), final_file_size).await
                 }) {
                     Ok(_) => {
-                        debug!("release: flushed buffer for fh {}", fh);
+                        debug!("release: flushed buffer for fh {} at offset {}", fh, offset);
                     }
                     Err(e) => {
                         error!("release: failed to flush buffer for fh {}: {}", fh, e);
@@ -278,5 +335,87 @@ impl Filesystem for RemoteFileSystem {
         
         self.fh_manager.release_fh(fh);
         reply.ok();
+    }
+
+    fn setxattr(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _name: &OsStr,
+        _value: &[u8],
+        _flags: i32,
+        _position: u32,
+        reply: ReplyEmpty,
+    ) {
+        // Report that extended attributes are not supported
+        // This tells macOS/cp to skip xattr operations rather than fail
+        debug!("setxattr called (not supported)");
+        reply.error(EOPNOTSUPP);
+    }
+
+    fn getxattr(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _name: &OsStr,
+        _size: u32,
+        reply: ReplyXattr,
+    ) {
+        // Return empty extended attributes
+        debug!("getxattr called (returning empty)");
+        reply.data(&[]);
+    }
+
+    fn listxattr(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _size: u32,
+        reply: ReplyXattr,
+    ) {
+        // Return empty list of extended attributes
+        debug!("listxattr called (returning empty)");
+        reply.data(&[]);
+    }
+
+    fn removexattr(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _name: &OsStr,
+        reply: ReplyEmpty,
+    ) {
+        // Accept removal requests without error
+        debug!("removexattr called (silently accepted)");
+        reply.ok();
+    }
+
+    fn access(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _mask: i32,
+        reply: ReplyEmpty,
+    ) {
+        // Grant all access permissions
+        // This prevents "operation not permitted" errors on permission checks
+        debug!("access called (granting all permissions)");
+        reply.ok();
+    }
+
+    fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: fuser::ReplyStatfs) {
+        // Return basic filesystem stats to satisfy statfs calls
+        // These values don't need to be accurate for a remote filesystem
+        debug!("statfs called");
+        reply.statfs(
+            1_000_000,  // blocks
+            900_000,    // bfree (free blocks)
+            900_000,    // bavail (available blocks)
+            1_000_000,  // files
+            900_000,    // ffree (free files)
+            4096,       // block size (common value)
+            255,        // max filename length
+            4096,       // fragment size
+        );
     }
 }

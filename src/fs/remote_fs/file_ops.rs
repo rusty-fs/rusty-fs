@@ -2,10 +2,10 @@ use crate::fs::http::HttpError;
 use crate::fs::http::FileEntry;
 use crate::fs::utils::path;
 use crate::fs::utils::runtime;
-use libc::{O_APPEND, O_EXCL, O_TRUNC};
+use libc::{O_APPEND, O_EXCL, O_TRUNC, mode_t};
 use std::ffi::OsStr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::error;
+use tracing::{debug, error};
 
 use super::RemoteFileSystem;
 
@@ -65,8 +65,8 @@ impl RemoteFileSystem {
             name: name_str.to_string(),
             is_dir: false,
             size: 0,
-            permissions: perm_bits.into(),
-            modified: 0,
+            permissions: Some(perm_bits as u32),
+            modified: Some(1_000_000_000), // Safe default timestamp ~2001-09-09
         };
 
         if (flags & O_EXCL) != 0 {
@@ -83,60 +83,48 @@ impl RemoteFileSystem {
         let client = self.http_client.clone();
         let path_clone = full_path.clone();
 
-        match runtime::runtime()
+        // Check if file exists and get size
+        let file_exists = match runtime::runtime()
             .block_on(async move { client.get_file_metadata(&path_clone).await })
         {
             Ok(meta) => {
                 if truncate {
-                    // truncate on server now
+                    // Truncate on server: send empty content-range to set size to 0
                     let client2 = self.http_client.clone();
                     let path2 = full_path.clone();
                     if let Err(e) = runtime::runtime().block_on(async move {
-                        client2
-                            .put_file_stream(&path2, Vec::new(), None, None)
-                            .await
+                        client2.put_file_stream(&path2, Vec::new(), None, None).await
                     }) {
                         error!("create (truncate) failed: {}", e);
                         return Err(e);
                     }
+                    Some(0)
                 } else {
-                    // Prefetch whole file so writes can patch existing data
-                    let client2 = self.http_client.clone();
-                    let path2 = full_path.clone();
-                    let size = meta.size as usize;
-                    match runtime::runtime()
-                        .block_on(async move { client2.read_range(&path2, 0, size).await })
-                    {
-                        Ok(data) => {
-                            let fh = self.fh_manager.alloc_fh();
-                            if let Some(state) = self.fh_manager.get_fh_state(fh) {
-                                state.buf = data;
-                            }
-                            return Ok((self.config.ttl, attr, 0, fh, 0));
-                        }
-                        Err(e) => {
-                            error!("create prefetch failed: {}", e);
-                            return Err(e);
-                        }
-                    }
+                    // File exists, don't prefetch - let writes handle it with ranges
+                    Some(meta.size)
                 }
             }
             Err(_) => {
-                // file doesn't exist -> create empty file on server now
+                // File doesn't exist, create empty on server
                 let client2 = self.http_client.clone();
                 let path2 = full_path.clone();
                 if let Err(e) = runtime::runtime().block_on(async move {
-                    client2
-                        .put_file_stream(&path2, Vec::new(), None, None)
-                        .await
+                    client2.put_file_stream(&path2, Vec::new(), None, None).await
                 }) {
                     error!("create (new file) failed: {}", e);
                     return Err(e);
                 }
+                None
             }
-        }
+        };
 
+        // Allocate file handle without prefetching
         let fh = self.fh_manager.alloc_fh();
+        if let Some(state) = self.fh_manager.get_fh_state(fh) {
+            // Set file size if known, None for new files
+            state.file_size = file_exists;
+            state.buf_offset = 0;
+        }
         Ok((self.config.ttl, attr, 0, fh, 0))
     }
 
@@ -151,44 +139,112 @@ impl RemoteFileSystem {
         _flags: i32,
         _lock_owner: Option<u64>,
     ) -> Result<u32, HttpError> {
-        match self.fh_manager.get_fh_state(fh) {
-            Some(state) => {
-                let off = offset as usize;
+        const CHUNK_SIZE: usize = 1024 * 1024 * 2; // 2MB chunks
 
-                // Expand buffer if needed
-                if state.buf.len() < off + data.len() {
-                    state.buf.resize(off + data.len(), 0);
-                }
+        // Get path upfront to avoid borrow conflicts
+        let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
 
-                // Write to local buffer
-                state.buf[off..off + data.len()].copy_from_slice(data);
-
-                // Mark as dirty
-                state.dirty = true;
-                state.last_write_offset = Some(off);
-
-                if state.buf.len() > self.config.max_buffer_size {
-                    let path = match self.get_path_for_inode(ino) {
-                        Some(p) => p,
-                        None => {
-                            error!("write failed: inode {} not found", ino);
-                            return Err(HttpError::NotFound);
-                        }
-                    };
-
-                    let data_to_flush = {
-                        let state_ref = self.fh_manager.get_fh_state(fh).unwrap();
-                        let taken = std::mem::take(&mut state_ref.buf);
-                        state_ref.dirty = false;
-                        state_ref.last_write_offset = None;
-                        taken
-                    };
-                 
-                    self.flush_buffer_owned(path, data_to_flush)?;
-                }
-                Ok(data.len() as u32)
+        // Check if we need to flush before appending
+        let should_flush_before = {
+            if let Some(state) = self.fh_manager.get_fh_state(fh) {
+                let off = offset as u64;
+                !state.buf.is_empty() && state.buf_offset + state.buf.len() as u64 != off
+            } else {
+                return Err(HttpError::Other("invalid file handle".into()));
             }
-            None => Err(HttpError::Other("invalid file handle".into())),
+        };
+
+        if should_flush_before {
+            // Collect flush info and release borrow
+            let (data_to_flush, buf_offset) = {
+                let state = self.fh_manager.get_fh_state(fh).unwrap();
+                let buf_offset = state.buf_offset;
+                let data = std::mem::take(&mut state.buf);
+                state.buf = Vec::with_capacity(CHUNK_SIZE);
+                state.dirty = false;
+                (data, buf_offset)
+            };
+            // Intermediate flush: don't include total_size yet
+            self.flush_chunk(path.clone(), data_to_flush, buf_offset, None)?;
+        }
+
+        // Now append data
+        {
+            let state = self.fh_manager.get_fh_state(fh).unwrap();
+            let off = offset as u64;
+
+            if state.buf.is_empty() {
+                state.buf_offset = off;
+            }
+            state.buf.extend_from_slice(data);
+            state.dirty = true;
+
+            // Update file size estimate
+            let new_end = off + data.len() as u64;
+            if let Some(size) = state.file_size {
+                if new_end > size {
+                    state.file_size = Some(new_end);
+                }
+            } else {
+                state.file_size = Some(new_end);
+            }
+        }
+
+        // Check if we need to flush after appending
+        let should_flush_after = {
+            if let Some(state) = self.fh_manager.get_fh_state(fh) {
+                state.buf.len() > CHUNK_SIZE
+            } else {
+                false
+            }
+        };
+
+        if should_flush_after {
+            let (data_to_flush, buf_offset) = {
+                let state = self.fh_manager.get_fh_state(fh).unwrap();
+                let buf_offset = state.buf_offset;
+                let data = std::mem::take(&mut state.buf);
+                state.buf = Vec::with_capacity(CHUNK_SIZE);
+                state.dirty = false;
+                (data, buf_offset)
+            };
+            // Intermediate flush: don't include total_size yet
+            self.flush_chunk(path, data_to_flush, buf_offset, None)?;
+        }
+
+        Ok(data.len() as u32)
+    }
+
+    fn flush_chunk(
+        &self,
+        path: String,
+        data: Vec<u8>,
+        offset: u64,
+        total_size: Option<u64>,
+    ) -> Result<(), HttpError> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        let client = self.http_client.clone();
+        let path_clone = path.clone();
+
+        let result = runtime::runtime().block_on(async move {
+            // Send with Content-Range header for resumable uploads
+            client
+                .put_file_stream(&path_clone, data, Some(offset), total_size)
+                .await
+        });
+
+        match result {
+            Ok(_) => {
+                debug!("Flushed chunk at offset {} for {}", offset, path);
+                Ok(())
+            }
+            Err(e) => {
+                error!("flush chunk failed at offset {} during upload: {}", offset, e);
+                Err(e)
+            }
         }
     }
 
@@ -236,23 +292,29 @@ impl RemoteFileSystem {
         };
 
         if let Some(new_size) = size {
-            error!("truncating file {} to size {}", path, new_size);
+            debug!("truncating file {} to size {}", path, new_size);
 
-            let current_data;
-            if new_size == 0 {
-                current_data = Vec::new();
+            // For truncate, we need to send the new size to the server
+            // If new_size is 0, send empty file
+            // If new_size > 0, we need to either pad with zeros or get the existing data
+            let current_data = if new_size == 0 {
+                Vec::new()
             } else {
-                // Read existing data up to new_size
-                current_data = self.read_bytes(ino, 0, new_size as usize)?;
-            }
+                // Read what we need up to new_size
+                // For large truncations, we don't want to load entire file
+                // Instead, let server handle it by sending a special truncate marker
+                // For now, we'll send an empty body with Content-Range to signal truncate
+                Vec::new()
+            };
 
             let client = self.http_client.clone();
             let path_clone = path.clone();
             let data_clone = current_data;
 
             match runtime::runtime().block_on(async move {
+                // Send with size hint so server knows this is a size-setting operation
                 client
-                    .put_file_stream(&path_clone, data_clone, None, None)
+                    .put_file_stream(&path_clone, data_clone, Some(0), Some(new_size))
                     .await
             }) {
                 Ok(_) => {

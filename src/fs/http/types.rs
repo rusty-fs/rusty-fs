@@ -6,8 +6,9 @@ pub struct FileEntry {
     pub name: String,
     pub is_dir: bool,
     pub size: u64,
-    pub modified: u64,
-    pub permissions: mode_t,
+    #[serde(default)]
+    pub modified: Option<u64>,
+    pub permissions: Option<mode_t>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

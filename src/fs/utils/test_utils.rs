@@ -21,21 +21,21 @@ impl FakeBackend {
                 name: "f.txt".to_string(),
                 is_dir: false,
                 size: 10,
-                modified: SystemTime::now()
+                modified: Some(SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
-                    .as_secs(),
-                permissions: 0o644,
+                    .as_secs()),
+                permissions: Some(0o644),
             },
             FileEntry {
                 name: "dir".to_string(),
                 is_dir: true,
                 size: 0,
-                modified: SystemTime::now()
+                modified: Some(SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
-                    .as_secs(),
-                permissions: 0o755,
+                    .as_secs()),
+                permissions: Some(0o755),
             },
         ];
         listing_map.insert("/".to_string(), root_children.clone());
@@ -46,11 +46,11 @@ impl FakeBackend {
                 name: "inner.txt".to_string(),
                 is_dir: false,
                 size: 5,
-                modified: SystemTime::now()
+                modified: Some(SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
-                    .as_secs(),
-                permissions: 0o600,
+                    .as_secs()),
+                permissions: Some(0o600),
             }],
         );
 
@@ -62,11 +62,11 @@ impl FakeBackend {
                 name: "f.txt".to_string(),
                 is_dir: false,
                 size: 10,
-                modified: SystemTime::now()
+                modified: Some(SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
-                    .as_secs(),
-                permissions: 0o644,
+                    .as_secs()),
+                permissions: Some(0o644),
             },
         );
         metadata_map.insert(
@@ -75,11 +75,11 @@ impl FakeBackend {
                 name: "dir".to_string(),
                 is_dir: true,
                 size: 0,
-                modified: SystemTime::now()
+                modified: Some(SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
-                    .as_secs(),
-                permissions: 0o755,
+                    .as_secs()),
+                permissions: Some(0o755),
             },
         );
         metadata_map.insert(
@@ -88,11 +88,11 @@ impl FakeBackend {
                 name: "inner.txt".to_string(),
                 is_dir: false,
                 size: 5,
-                modified: SystemTime::now()
+                modified: Some(SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
-                    .as_secs(),
-                permissions: 0o600,
+                    .as_secs()),
+                permissions: Some(0o600),
             },
         );
 
@@ -188,11 +188,11 @@ impl HttpBackend for FakeBackend {
                 name: path.split('/').last().unwrap_or("").to_string(),
                 is_dir: false,
                 size: data.len() as u64,
-                modified: SystemTime::now()
+                modified: Some(SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
-                    .as_secs(),
-                permissions: 0o644,
+                    .as_secs()),
+                permissions: Some(0o644),
             },
         );
         Ok(())
