@@ -204,6 +204,15 @@ async fn stream_file(
     }
     let read_len = end.saturating_sub(start).saturating_add(1);
 
+    // Log range request for performance monitoring
+    tracing::info!(
+        "Range request: {}-{}/{} ({} bytes)",
+        start,
+        end,
+        file_size,
+        read_len
+    );
+
     let mut file = file;
     file.seek(std::io::SeekFrom::Start(start))
         .await
