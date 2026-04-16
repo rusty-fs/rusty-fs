@@ -406,8 +406,12 @@ pub async fn put_file(
 
         f.write_all(&body)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        f.sync_all()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        // Only fsync if body is not empty (non-trivial write)
+        // Empty writes are just file creation/truncation - will be finalized later
+        if !body.is_empty() {
+            f.sync_all()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
         drop(f);
 
         std::fs::rename(&tmp_path, &full_path)
@@ -424,8 +428,9 @@ pub async fn put_file(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         f.write_all(&body)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        f.sync_all()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        // Don't sync on every partial write - let OS buffer writes
+        // Only sync on finalization (when total_size is known)
+        // Drop file to flush buffers without explicit fsync
     }
 
     if existed {
