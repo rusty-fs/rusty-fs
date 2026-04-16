@@ -1,12 +1,12 @@
 use axum::{
+    Json,
     body::Body,
     extract::{Extension, Path},
     http::{
-        header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE},
         HeaderMap, HeaderValue, StatusCode,
+        header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE},
     },
     response::{IntoResponse, Response},
-    Json,
 };
 use bytes::Bytes;
 use serde::Serialize;
@@ -20,8 +20,9 @@ use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use tokio::fs::File as TokioFile;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 pub async fn list(
     requested_path: Option<Path<String>>,
@@ -191,8 +192,11 @@ async fn stream_file(
             HeaderValue::from_str(&file_size.to_string())
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
         );
-        resp_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
-        
+        resp_headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/octet-stream"),
+        );
+
         // Return a concrete Response to avoid Rust 2024 impl Trait lifetime captures
         return Ok((StatusCode::OK, resp_headers, Body::from_stream(stream)).into_response());
     }
@@ -205,7 +209,7 @@ async fn stream_file(
     let read_len = end.saturating_sub(start).saturating_add(1);
 
     // Log range request for performance monitoring
-    tracing::info!(
+    tracing::trace!(
         "Range request: {}-{}/{} ({} bytes)",
         start,
         end,
@@ -217,7 +221,7 @@ async fn stream_file(
     file.seek(std::io::SeekFrom::Start(start))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
+
     let reader = file.take(read_len);
     let stream = ReaderStream::new(reader);
 
@@ -233,13 +237,17 @@ async fn stream_file(
         HeaderValue::from_str(&read_len.to_string())
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
     );
-    resp_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+    resp_headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
 
     Ok((
         StatusCode::PARTIAL_CONTENT,
         resp_headers,
         Body::from_stream(stream),
-    ).into_response())
+    )
+        .into_response())
 }
 
 pub async fn read(
@@ -259,7 +267,7 @@ pub async fn read(
         PathBuf::from(base_dir.trim_end_matches('/')).join(&requested)
     };
 
-    info!("Reading file: {} -> {:?}", requested, full_path);
+    debug!("Reading file: {} -> {:?}", requested, full_path);
 
     // Pass only the relevant header, not the whole map
     stream_file(full_path, headers.get("range")).await
@@ -354,11 +362,11 @@ pub async fn put_file(
     }
 
     let full_path = PathBuf::from(base_dir.trim_end_matches('/')).join(&requested);
-    info!("Writing file: {} -> {:?}", requested, full_path);
+    debug!("Writing file: {} -> {:?}", requested, full_path);
 
-    debug!("Headers: {:?}", headers);
-    debug!("Content-Range header: {:?}", headers.get("content-range"));
-    debug!("Body length: {}", body.len());
+    trace!("Headers: {:?}", headers);
+    trace!("Content-Range header: {:?}", headers.get("content-range"));
+    trace!("Body length: {}", body.len());
 
     if let Some(parent) = full_path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
@@ -378,19 +386,26 @@ pub async fn put_file(
 
     // Handle empty body with total_size: this is a finalize operation
     if body.is_empty() && total_size.is_some() {
-        info!("Finalize request detected, truncating file to size {}", total_size.unwrap());
+        debug!(
+            "Finalize request detected, truncating file to size {}",
+            total_size.unwrap()
+        );
         let mut f = std::fs::OpenOptions::new()
+        let mut f = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .open(&full_path)
+            .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        
+
         f.set_len(total_size.unwrap())
+        f.set_len(total_size.unwrap()).await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         f.sync_all()
+        f.sync_all().await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     } else if should_truncate {
-        info!("Full write detected, truncating file if it exists");
+        debug!("Full write detected, truncating file if it exists");
         let mut tmp_path = full_path.clone();
         tmp_path.set_extension(format!(
             "{}.filer_tmp",
@@ -398,35 +413,43 @@ pub async fn put_file(
         ));
 
         let mut f = std::fs::OpenOptions::new()
+        let mut f = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
             .open(&tmp_path)
+            .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         f.write_all(&body)
+        f.write_all(&body).await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         // Only fsync if body is not empty (non-trivial write)
         // Empty writes are just file creation/truncation - will be finalized later
         if !body.is_empty() {
             f.sync_all()
+            f.sync_all().await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         drop(f);
 
-        std::fs::rename(&tmp_path, &full_path)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        std::fs::rename(&tmp_path, &full_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        tokio::fs::rename(&tmp_path, &full_path).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     } else {
-        info!("Partial write detected at offset {}", offset);
+        trace!("Partial write detected at offset {}", offset);
         let mut f = std::fs::OpenOptions::new()
+        let mut f = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .open(&full_path)
+            .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         f.seek(SeekFrom::Start(offset))
+        f.seek(SeekFrom::Start(offset)).await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         f.write_all(&body)
+        f.write_all(&body).await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         // Don't sync on every partial write - let OS buffer writes
         // Only sync on finalization (when total_size is known)

@@ -1,6 +1,9 @@
-use axum::{routing::{delete, get, post, put}, Extension, Router};
+use crate::handlers::{delete_path, list, meta, mkdir, put_file, read};
 use axum::extract::DefaultBodyLimit;
-use crate::handlers::{list, meta, read, mkdir, delete_path, put_file};
+use axum::{
+    Extension, Router,
+    routing::{delete, get, post, put},
+};
 use std::sync::Arc;
 use tower_http::trace::{self, TraceLayer};
 use tracing::Level;
@@ -19,8 +22,8 @@ pub fn build_app(shared_base_dir: Arc<String>) -> Router {
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB limit
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(trace::DefaultMakeSpan::new().level(Level::INFO))
-                .on_request(trace::DefaultOnRequest::new().level(Level::DEBUG))
-                .on_response(trace::DefaultOnResponse::new().level(Level::INFO))
+                .make_span_with(trace::DefaultMakeSpan::new().level(Level::TRACE))
+                .on_request(trace::DefaultOnRequest::new().level(Level::TRACE))
+                .on_response(trace::DefaultOnResponse::new().level(Level::TRACE)),
         )
 }
