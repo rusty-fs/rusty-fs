@@ -62,6 +62,7 @@ pub trait HttpBackend: Send + Sync {
         offset: Option<u64>,
         total_size: Option<u64>,
     ) -> Result<(), HttpError>;
+    async fn rename(&self, path: &str, dst: &str) -> Result<(), HttpError>;
 }
 
 #[derive(Clone)]
@@ -122,6 +123,11 @@ impl HttpBackend for HttpClient {
         let url = format!("{}/meta{}", self.base_url, path);
         let resp = self.client.get(&url).send().await?;
         let status = resp.status();
+        if let Some(len) = resp.content_length() {
+            debug!("get_file_metadata response: {} content-length={}", status, len);
+        } else {
+            debug!("get_file_metadata response: {} (no content-length)", status);
+        }
         let text = resp.text().await?;
         if !status.is_success() {
             return Err(HttpError::Other(
@@ -227,6 +233,33 @@ impl HttpBackend for HttpClient {
             ));
         }
 
+        Ok(())
+    }
+
+    async fn rename(&self, path: &str, dst: &str) -> Result<(), HttpError> {
+        let url = format!("{}/files{}", self.base_url, path);
+    // Send `new_name` to match server handler (same-directory rename)
+    let body = serde_json::json!({ "new_name": dst }).to_string();
+        debug!("rename URL: {} dst={}", url, dst);
+        let resp = self
+            .client
+            .patch(&url)
+            .header("content-type", "application/json")
+            .body(body)
+            .send()
+            .await?;
+        let status = resp.status();
+        if let Some(len) = resp.content_length() {
+            debug!("rename response: {} content-length={}", status, len);
+        } else {
+            debug!("rename response: {} (no content-length)", status);
+        }
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(HttpError::Other(
+                format!("rename failed: {} - {}", status, text).into(),
+            ));
+        }
         Ok(())
     }
 }

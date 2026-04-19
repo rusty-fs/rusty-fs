@@ -154,6 +154,27 @@ impl Filesystem for RemoteFileSystem {
         }
     }
 
+    fn rename(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        newparent: u64,
+        newname: &OsStr,
+        _flags: u32,
+        reply: fuser::ReplyEmpty,
+    ) {
+        debug!("rename called: parent={}, name={:?}, newparent={}, newname={:?}", parent, name, newparent, newname);
+
+        match self.rename(parent, name, newparent, newname) {
+            Ok(_) => reply.ok(),
+            Err(e) => {
+                error!("rename failed: {}", e);
+                reply.error(e.to_errno());
+            }
+        }
+    }
+
     fn create(
         &mut self,
         _req: &Request<'_>,

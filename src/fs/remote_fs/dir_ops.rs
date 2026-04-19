@@ -217,4 +217,55 @@ impl RemoteFileSystem {
             }
         }
     }
+
+    /// Rename or move a file: supports renaming within same directory or moving across directories
+    pub fn rename(&mut self, parent: u64, name: &OsStr, newparent: u64, newname: &OsStr) -> Result<(), HttpError> {
+        let name_str = match name.to_str() {
+            Some(s) => s,
+            None => {
+                error!("rename failed: invalid name {:?}", name);
+                return Err(HttpError::Other("invalid name".into()));
+            }
+        };
+        let newname_str = match newname.to_str() {
+            Some(s) => s,
+            None => {
+                error!("rename failed: invalid new name {:?}", newname);
+                return Err(HttpError::Other("invalid new name".into()));
+            }
+        };
+
+        let parent_path = self.get_path_for_inode(parent).ok_or(HttpError::NotFound)?;
+        let full_path = path::join_path(&parent_path, name_str);
+        let new_parent_path = self.get_path_for_inode(newparent).ok_or(HttpError::NotFound)?;
+        let new_full_path = path::join_path(&new_parent_path, newname_str);
+
+        // Prevent directory traversal from client-supplied names
+        if name_str.contains("..") || newname_str.contains("..") {
+            return Err(HttpError::Other("invalid name".into()));
+        }
+
+        let client = self.http_client.clone();
+        let src = full_path.clone();
+        let dst = new_full_path.clone();
+
+        // Call the HTTP client to perform server-side rename/move
+        let call_src = src.clone();
+        let call_dst = dst.clone();
+        let res = runtime::runtime().block_on(async move { client.rename(&call_src, &call_dst).await });
+
+        match res {
+            Ok(_) => {
+                // Update local inode mapping so subsequent lookups for the new
+                // path succeed immediately and don't confuse user-space tools
+                // (some file managers perform immediate lookups after rename).
+                self.inode_mapper.rename(&src, &dst);
+                Ok(())
+            }
+            Err(e) => {
+                error!("rename failed for {} -> {}: {}", src, dst, e);
+                Err(e)
+            }
+        }
+    }
 }

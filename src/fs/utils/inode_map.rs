@@ -47,6 +47,20 @@ impl InodeMapper {
         }
     }
 
+    /// Rename a mapped path to a new path. If the old path exists in the mapper,
+    /// preserve its inode and move the mapping to the new path. If the old path
+    /// is not known, ensure the new path has a mapping (create one).
+    pub fn rename(&mut self, old_path: &str, new_path: &str) {
+        if let Some(ino) = self.path_to_inode.remove(old_path) {
+            // update inode -> path and path -> inode
+            self.inode_to_path.insert(ino, new_path.to_string());
+            self.path_to_inode.insert(new_path.to_string(), ino);
+        } else {
+            // if old path not present, just ensure new_path has an inode
+            let _ = self.get_or_create_inode(new_path);
+        }
+    }
+
     /// Check if a path exists in the mapper
     pub fn contains(&self, path: &str) -> bool {
         self.path_to_inode.contains_key(path)
