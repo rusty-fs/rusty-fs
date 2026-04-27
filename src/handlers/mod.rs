@@ -413,13 +413,15 @@ pub async fn put_file(
             tmp_path.extension().and_then(|s| s.to_str()).unwrap_or("")
         ));
 
-        let mut f = tokio::fs::OpenOptions::new()
+        let f = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
             .open(&tmp_path)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        
+        let mut f = tokio::io::BufWriter::with_capacity(8 * 1024 * 1024, f); // 8MB buffer
 
         let mut stream = body.into_data_stream();
         use futures::StreamExt;
@@ -433,6 +435,10 @@ pub async fn put_file(
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
         }
+        
+        f.flush().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let mut f = f.into_inner();
+        
         // Only fsync if body is not empty (non-trivial write)
         // Empty writes are just file creation/truncation - will be finalized later
         if !is_empty_body {
@@ -453,6 +459,8 @@ pub async fn put_file(
 
         f.seek(SeekFrom::Start(offset)).await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            
+        let mut f = tokio::io::BufWriter::with_capacity(8 * 1024 * 1024, f); // 8MB buffer
         let mut stream = body.into_data_stream();
         use futures::StreamExt;
         while let Some(chunk) = stream.next().await {
@@ -465,6 +473,9 @@ pub async fn put_file(
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
         }
+        
+        f.flush().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        
         // Don't sync on every partial write - let OS buffer writes
         // Only sync on finalization (when total_size is known)
         // Drop file to flush buffers without explicit fsync
