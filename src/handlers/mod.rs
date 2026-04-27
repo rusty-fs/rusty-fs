@@ -19,7 +19,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use tokio::fs::File as TokioFile;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, trace};
@@ -349,7 +348,7 @@ pub async fn put_file(
     file_path: Path<String>,
     Extension(base_dir): Extension<Arc<String>>,
     headers: HeaderMap,
-    body: Bytes,
+    body: Body,
 ) -> Result<StatusCode, StatusCode> {
     let requested_raw = file_path.0;
     if requested_raw.contains("..") {
@@ -366,7 +365,6 @@ pub async fn put_file(
 
     trace!("Headers: {:?}", headers);
     trace!("Content-Range header: {:?}", headers.get("content-range"));
-    trace!("Body length: {}", body.len());
 
     if let Some(parent) = full_path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
@@ -384,13 +382,18 @@ pub async fn put_file(
         (0, true, None)
     };
 
+    let content_length = headers
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok());
+    let is_empty_body = content_length == Some(0);
+
     // Handle empty body with total_size: this is a finalize operation
-    if body.is_empty() && total_size.is_some() {
+    if is_empty_body && total_size.is_some() {
         debug!(
             "Finalize request detected, truncating file to size {}",
             total_size.unwrap()
         );
-        let mut f = std::fs::OpenOptions::new()
         let mut f = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
@@ -398,10 +401,8 @@ pub async fn put_file(
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        f.set_len(total_size.unwrap())
         f.set_len(total_size.unwrap()).await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        f.sync_all()
         f.sync_all().await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     } else if should_truncate {
@@ -412,7 +413,6 @@ pub async fn put_file(
             tmp_path.extension().and_then(|s| s.to_str()).unwrap_or("")
         ));
 
-        let mut f = std::fs::OpenOptions::new()
         let mut f = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
@@ -421,23 +421,29 @@ pub async fn put_file(
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        f.write_all(&body)
-        f.write_all(&body).await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let mut stream = body.into_data_stream();
+        use futures::StreamExt;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| {
+                error!("Failed to read stream chunk: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            f.write_all(&chunk).await.map_err(|e| {
+                error!("Failed to write chunk: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+        }
         // Only fsync if body is not empty (non-trivial write)
         // Empty writes are just file creation/truncation - will be finalized later
-        if !body.is_empty() {
-            f.sync_all()
+        if !is_empty_body {
             f.sync_all().await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         drop(f);
 
-        std::fs::rename(&tmp_path, &full_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         tokio::fs::rename(&tmp_path, &full_path).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     } else {
         trace!("Partial write detected at offset {}", offset);
-        let mut f = std::fs::OpenOptions::new()
         let mut f = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
@@ -445,12 +451,20 @@ pub async fn put_file(
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        f.seek(SeekFrom::Start(offset))
         f.seek(SeekFrom::Start(offset)).await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        f.write_all(&body)
-        f.write_all(&body).await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let mut stream = body.into_data_stream();
+        use futures::StreamExt;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| {
+                error!("Failed to read stream chunk: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            f.write_all(&chunk).await.map_err(|e| {
+                error!("Failed to write chunk: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+        }
         // Don't sync on every partial write - let OS buffer writes
         // Only sync on finalization (when total_size is known)
         // Drop file to flush buffers without explicit fsync
