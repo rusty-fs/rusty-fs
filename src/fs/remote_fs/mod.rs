@@ -1,10 +1,10 @@
-use crate::fs::http::{HttpBackend, HttpError, FileEntry};
-use crate::fs::utils::path;
-use crate::fs::utils::inode_map::InodeMapper;
-use crate::fs::utils::runtime;
 use crate::fs::config::FuseConfig;
+use crate::fs::http::{FileEntry, HttpBackend, HttpError};
 use crate::fs::utils::file_handle::FhManager;
-use fuser::{FUSE_ROOT_ID, FileAttr, FileType};
+use crate::fs::utils::inode_map::InodeMapper;
+use crate::fs::utils::path;
+use crate::fs::utils::runtime;
+use fuser::{FileAttr, FileType, FUSE_ROOT_ID};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error};
@@ -65,7 +65,7 @@ impl RemoteFileSystem {
                 UNIX_EPOCH + Duration::from_secs(1_000_000_000) // ~2001-09-09
             }
         };
-        
+
         let perm = entry.permissions.unwrap_or(0o644) as u16;
         FileAttr {
             ino: inode,

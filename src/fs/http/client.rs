@@ -4,7 +4,7 @@ use libc::{EACCES, EIO, ENOENT};
 use reqwest::StatusCode;
 use reqwest::header::RANGE;
 use thiserror::Error;
-use tracing::{debug, error};
+use tracing::{debug, trace};
 
 #[derive(Debug, Error)]
 pub enum HttpError {
@@ -58,7 +58,7 @@ pub trait HttpBackend: Send + Sync {
     async fn put_file_stream(
         &self,
         path: &str,
-        data: Vec<u8>,
+        body: reqwest::Body,
         offset: Option<u64>,
         total_size: Option<u64>,
     ) -> Result<(), HttpError>;
@@ -148,14 +148,14 @@ impl HttpBackend for HttpClient {
         offset: u64,
         length: usize,
     ) -> Result<Vec<u8>, HttpError> {
-        debug!(
-            "Reading range {}-{} from file {}",
-            offset,
-            offset.saturating_add(length as u64).saturating_sub(1),
-            path
-        );
-        let url = format!("{}/files{}", self.base_url, path);
         let end = offset.saturating_add(length as u64).saturating_sub(1);
+        
+        trace!(
+            "Sending range request: {}-{} ({} bytes) for file {}",
+            offset, end, length, path
+        );
+        
+        let url = format!("{}/files{}", self.base_url, path);
         let range_header = format!("bytes={}-{}", offset, end);
         let resp = self
             .client
@@ -203,23 +203,20 @@ impl HttpBackend for HttpClient {
     async fn put_file_stream(
         &self,
         path: &str,
-        data: Vec<u8>,
+        body: reqwest::Body,
         offset: Option<u64>,
         total_size: Option<u64>,
     ) -> Result<(), HttpError> {
         let url = format!("{}/files{}", self.base_url, path);
 
-        let mut request = self.client.put(&url).body(data.clone());
+        let mut request = self.client.put(&url).body(body);
 
         if let Some(start) = offset {
-            // Use saturating arithmetic to prevent underflow
-            let end = start.saturating_add(data.len() as u64).saturating_sub(1);
             let range_value = if let Some(size) = total_size {
-                format!("bytes {}-{}/{}", start, end, size)
+                format!("bytes {}-*/{}", start, size)
             } else {
-                format!("bytes {}-{}/*", start, end)
+                format!("bytes {}-*/*", start)
             };
-
             request = request.header("Content-Range", range_value);
         }
 

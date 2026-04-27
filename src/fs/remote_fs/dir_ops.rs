@@ -1,5 +1,5 @@
-use crate::fs::http::HttpError;
 use crate::fs::http::FileEntry;
+use crate::fs::http::HttpError;
 use crate::fs::utils::path;
 use crate::fs::utils::runtime;
 use fuser::FileType;
@@ -73,7 +73,7 @@ impl RemoteFileSystem {
                     }
                 }
             }
-        })?;;
+        })?;
 
         Ok(self.file_entry_to_attr(&res, ino))
     }
@@ -83,8 +83,8 @@ impl RemoteFileSystem {
         let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
         let client = self.http_client.clone();
         let path_clone = path.clone();
-        let entries = runtime::runtime()
-            .block_on(async move { client.list_directory(&path_clone).await })?;
+        let entries =
+            runtime::runtime().block_on(async move { client.list_directory(&path_clone).await })?;
         let mut out = Vec::new();
         for entry in entries.into_iter() {
             let entry_path = path::join_path(&path, &entry.name);
@@ -162,8 +162,7 @@ impl RemoteFileSystem {
 
         let client = self.http_client.clone();
         let path_clone = full_path.clone();
-        match runtime::runtime()
-            .block_on(async move { client.create_directory(&path_clone).await })
+        match runtime::runtime().block_on(async move { client.create_directory(&path_clone).await })
         {
             Ok(_) => {
                 // After creation, get attributes
@@ -203,8 +202,8 @@ impl RemoteFileSystem {
 
         let client = self.http_client.clone();
         let path_clone = full_path.clone();
-        let result = runtime::runtime()
-            .block_on(async move { client.delete_path(&path_clone).await });
+        let result =
+            runtime::runtime().block_on(async move { client.delete_path(&path_clone).await });
 
         match result {
             Ok(_) => {

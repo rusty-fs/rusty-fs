@@ -45,10 +45,12 @@ mod tests {
             name: "f.txt".into(),
             is_dir: false,
             size: 1234,
-            modified: Some(SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs()),
+            modified: Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            ),
             permissions: Some(0o644),
         };
         let attr = fs.file_entry_to_attr(&entry_file, 42);
@@ -61,10 +63,12 @@ mod tests {
             name: "d".into(),
             is_dir: true,
             size: 0,
-            modified: Some(SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs()),
+            modified: Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            ),
             permissions: Some(0o755),
         };
         let attrd = fs.file_entry_to_attr(&entry_dir, 43);
@@ -80,9 +84,7 @@ mod tests {
         let mut fs = RemoteFileSystem::new(backend.clone());
 
         // root readdir
-        let entries = fs
-            .readdir(FUSE_ROOT_ID)
-            .expect("readdir should succeed");
+        let entries = fs.readdir(FUSE_ROOT_ID).expect("readdir should succeed");
         assert_eq!(entries.len(), 2);
         let names: Vec<String> = entries.iter().map(|(_, e)| e.name.clone()).collect();
         assert!(names.contains(&"f.txt".to_string()));
@@ -184,9 +186,7 @@ mod tests {
         let mut fs = RemoteFileSystem::new(backend.clone());
 
         // getattr root
-        let root_attr = fs
-            .getattr(FUSE_ROOT_ID)
-            .expect("getattr should succeed");
+        let root_attr = fs.getattr(FUSE_ROOT_ID).expect("getattr should succeed");
         assert_eq!(root_attr.kind, FileType::Directory);
 
         // getattr existing file
@@ -202,9 +202,6 @@ mod tests {
 
         // getattr non-existing inode
         let fake_ino = 9999;
-        assert!(matches!(
-            fs.getattr(fake_ino),
-            Err(HttpError::NotFound)
-        ));
+        assert!(matches!(fs.getattr(fake_ino), Err(HttpError::NotFound)));
     }
 }

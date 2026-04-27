@@ -21,20 +21,24 @@ impl FakeBackend {
                 name: "f.txt".to_string(),
                 is_dir: false,
                 size: 10,
-                modified: Some(SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()),
+                modified: Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                ),
                 permissions: Some(0o644),
             },
             FileEntry {
                 name: "dir".to_string(),
                 is_dir: true,
                 size: 0,
-                modified: Some(SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()),
+                modified: Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                ),
                 permissions: Some(0o755),
             },
         ];
@@ -46,10 +50,12 @@ impl FakeBackend {
                 name: "inner.txt".to_string(),
                 is_dir: false,
                 size: 5,
-                modified: Some(SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()),
+                modified: Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                ),
                 permissions: Some(0o600),
             }],
         );
@@ -62,10 +68,12 @@ impl FakeBackend {
                 name: "f.txt".to_string(),
                 is_dir: false,
                 size: 10,
-                modified: Some(SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()),
+                modified: Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                ),
                 permissions: Some(0o644),
             },
         );
@@ -75,10 +83,12 @@ impl FakeBackend {
                 name: "dir".to_string(),
                 is_dir: true,
                 size: 0,
-                modified: Some(SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()),
+                modified: Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                ),
                 permissions: Some(0o755),
             },
         );
@@ -88,10 +98,12 @@ impl FakeBackend {
                 name: "inner.txt".to_string(),
                 is_dir: false,
                 size: 5,
-                modified: Some(SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()),
+                modified: Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                ),
                 permissions: Some(0o600),
             },
         );
@@ -188,10 +200,12 @@ impl HttpBackend for FakeBackend {
                 name: path.split('/').last().unwrap_or("").to_string(),
                 is_dir: false,
                 size: data.len() as u64,
-                modified: Some(SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()),
+                modified: Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                ),
                 permissions: Some(0o644),
             },
         );

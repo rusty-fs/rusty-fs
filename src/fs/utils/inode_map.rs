@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use fuser::FUSE_ROOT_ID;
+use std::collections::HashMap;
 
 /// Manages the bidirectional mapping between inodes and file paths
 /// Centralizes all inode allocation and path lookup logic

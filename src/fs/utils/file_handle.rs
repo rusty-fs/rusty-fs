@@ -1,12 +1,15 @@
-use std::collections::{HashMap, BTreeMap};
+use std::collections::HashMap;
+use tokio::sync::mpsc;
+use bytes::Bytes;
+use reqwest::Error as ReqwestError;
 
 /// Represents the state of an open file handle
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FhState {
-    /// Local buffer for accumulated writes (max 1MB per chunk)
-    pub buf: Vec<u8>,
-    /// Current offset within the buffer
-    pub buf_offset: u64,
+    /// Active channel sender for streaming FUSE writes to the server
+    pub tx: Option<mpsc::Sender<Result<Bytes, ReqwestError>>>,
+    /// Expected offset for the next write to be contiguous
+    pub current_offset: u64,
     /// Whether this file has been modified
     pub dirty: bool,
     /// File size known from metadata (None if new file)
@@ -35,8 +38,8 @@ impl FhManager {
         self.fh_map.insert(
             fh,
             FhState {
-                buf: Vec::with_capacity(1024 * 1024), // 1MB capacity
-                buf_offset: 0,
+                tx: None,
+                current_offset: 0,
                 dirty: false,
                 file_size: None,
             },

@@ -7,9 +7,7 @@ static GLOBAL_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 /// Get or create the global Tokio runtime
 pub fn runtime() -> &'static Runtime {
-    GLOBAL_RUNTIME.get_or_init(|| {
-        Runtime::new().expect("Failed to create global Tokio runtime")
-    })
+    GLOBAL_RUNTIME.get_or_init(|| Runtime::new().expect("Failed to create global Tokio runtime"))
 }
 
 #[cfg(test)]

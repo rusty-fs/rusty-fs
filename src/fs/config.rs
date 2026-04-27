@@ -32,7 +32,7 @@ impl FuseConfig {
         let chunk_size = std::env::var("MOUNTY_CHUNK_SIZE")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(1024 * 1024); // 1 MB
+            .unwrap_or(1024 * 1024 * 10); // 1 MB
 
         Self {
             ttl: Duration::from_secs(ttl_secs),
@@ -65,7 +65,7 @@ impl Default for FuseConfig {
         Self {
             ttl: Duration::from_secs(1),
             max_buffer_size: 4 * 1024 * 1024, // 4 MB
-            chunk_size: 1024 * 1024, // 1 MB
+            chunk_size: 1024 * 1024,          // 1 MB
         }
     }
 }
@@ -87,7 +87,7 @@ mod tests {
         let config = FuseConfig::new()
             .with_ttl(Duration::from_secs(5))
             .with_max_buffer_size(2 * 1024 * 1024);
-        
+
         assert_eq!(config.ttl, Duration::from_secs(5));
         assert_eq!(config.max_buffer_size, 2 * 1024 * 1024);
         assert_eq!(config.chunk_size, 1024 * 1024); // unchanged
