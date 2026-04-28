@@ -201,7 +201,14 @@ async fn stream_file(
     }
 
     let (start, end_opt) = range.unwrap();
-    let end = end_opt.unwrap_or(file_size.saturating_sub(1));
+    
+    let max_end = file_size.saturating_sub(1);
+    let mut end = end_opt.unwrap_or(max_end);
+    
+    if end > max_end {
+        end = max_end;
+    }
+
     if start >= file_size || start > end {
         return Err(StatusCode::RANGE_NOT_SATISFIABLE);
     }
