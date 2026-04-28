@@ -221,7 +221,7 @@ async fn stream_file(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let reader = file.take(read_len);
+    let reader = tokio::io::BufReader::with_capacity(8 * 1024 * 1024, file.take(read_len));
     let stream = ReaderStream::new(reader);
 
     let content_range = format!("bytes {}-{}/{}", start, end, file_size);
