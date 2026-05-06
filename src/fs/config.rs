@@ -9,6 +9,10 @@ pub struct FuseConfig {
     pub max_buffer_size: usize,
     /// Read chunk size for partial reads (in bytes)
     pub chunk_size: usize,
+    /// Directory listing cache TTL
+    pub listing_cache_ttl: Duration,
+    /// Directory listing cache capacity (LRU)
+    pub listing_cache_capacity: usize,
 }
 
 impl FuseConfig {
@@ -32,12 +36,24 @@ impl FuseConfig {
         let chunk_size = std::env::var("MOUNTY_CHUNK_SIZE")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(1024 * 1024 * 10); // 1 MB
+            .unwrap_or(1024 * 1024); // 1 MB
+
+        let listing_cache_ttl_ms = std::env::var("MOUNTY_LISTING_CACHE_TTL_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(500);
+
+        let listing_cache_capacity = std::env::var("MOUNTY_LISTING_CACHE_CAPACITY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1024);
 
         Self {
             ttl: Duration::from_secs(ttl_secs),
             max_buffer_size,
             chunk_size,
+            listing_cache_ttl: Duration::from_millis(listing_cache_ttl_ms),
+            listing_cache_capacity: listing_cache_capacity,
         }
     }
 
@@ -58,6 +74,18 @@ impl FuseConfig {
         self.chunk_size = size;
         self
     }
+
+    /// Set listing cache TTL in milliseconds
+    pub fn with_listing_cache_ttl_ms(mut self, ms: u64) -> Self {
+        self.listing_cache_ttl = Duration::from_millis(ms);
+        self
+    }
+
+    /// Set listing cache capacity
+    pub fn with_listing_cache_capacity(mut self, cap: usize) -> Self {
+        self.listing_cache_capacity = cap;
+        self
+    }
 }
 
 impl Default for FuseConfig {
@@ -65,7 +93,9 @@ impl Default for FuseConfig {
         Self {
             ttl: Duration::from_secs(1),
             max_buffer_size: 4 * 1024 * 1024, // 4 MB
-            chunk_size: 1024 * 1024,          // 1 MB
+            chunk_size: 1024 * 1024, // 1 MB
+            listing_cache_ttl: Duration::from_millis(500),
+            listing_cache_capacity: 1024,
         }
     }
 }

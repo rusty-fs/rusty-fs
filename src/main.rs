@@ -7,8 +7,7 @@ use std::sync::Arc;
 
 use fuser::MountOption;
 
-use tracing::{debug, error, info, warn};
-use tracing_subscriber::filter::EnvFilter;
+use tracing::{debug, info};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> anyhow::Result<()> {
@@ -33,9 +32,13 @@ fn main() -> anyhow::Result<()> {
         server_url, mountpoint
     );
 
-    let http_client = Arc::new(HttpClient::new(server_url.to_string()));
-    let fs = RemoteFileSystem::with_config(http_client.clone(), FuseConfig::from_env());
-
+    let http_client =  Arc::new(HttpClient::new(server_url.to_string()));
+    // load configuration from env (with sensible defaults)
+    let config = fs::config::FuseConfig::from_env();
+    debug!("using FuseConfig: {:?}", config);
+    let fs = RemoteFileSystem::with_config(http_client.clone(), config.clone());
+    // metrics removed: no background metrics reporter
+    
     let mut options = vec![
         MountOption::RW, // Read-write
         MountOption::FSName("remote-fs".to_string()),

@@ -26,6 +26,8 @@ thiserror = "2.0.17"
 futures = "0.3"
 tokio-stream = "0.1.18"
 bytes = "1.11.1"
+indexmap = "1.9"
+
 
 [dev-dependencies]
 httpmock = "0.8.1"

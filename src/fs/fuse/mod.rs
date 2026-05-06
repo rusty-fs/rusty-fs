@@ -1,10 +1,7 @@
 // FUSE trait implementation for RemoteFileSystem
 
 use crate::fs::remote_fs::RemoteFileSystem;
-use fuser::{
-    Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyStatfs,
-    ReplyXattr, Request,
-};
+use fuser::{Filesystem, ReplyAttr, ReplyDirectory, ReplyEntry, ReplyEmpty, ReplyXattr, Request};
 use libc::{ENOENT, EOPNOTSUPP};
 use std::ffi::OsStr;
 use std::time::SystemTime;
@@ -44,7 +41,14 @@ impl Filesystem for RemoteFileSystem {
                 reply.entry(&self.config.ttl, &attr, 0);
             }
             Err(e) => {
-                error!("lookup failed: {:#?} {}", name, e);
+                // Treat ENOENT (not found) as a debug-level condition — many
+                // desktop apps probe common filenames and expect ENOENT. Log
+                // only at ERROR for unexpected failures.
+                if e.to_errno() == ENOENT {
+                    debug!("lookup not found: parent={} name={:?}", parent, name_str);
+                } else {
+                    error!("lookup failed: {:#?} {}", name, e);
+                }
                 reply.error(e.to_errno());
             }
         }

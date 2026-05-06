@@ -2,10 +2,10 @@ use crate::fs::http::FileEntry;
 use crate::fs::http::HttpError;
 use crate::fs::utils::path;
 use crate::fs::utils::runtime;
-use libc::{mode_t, O_APPEND, O_EXCL, O_TRUNC};
+use libc::{O_APPEND, O_EXCL, O_TRUNC};
 use std::ffi::OsStr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::{debug, error, trace};
+use std::time::{Duration};
+use tracing::{debug, error};
 
 use super::RemoteFileSystem;
 
