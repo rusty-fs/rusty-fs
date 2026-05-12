@@ -1,7 +1,6 @@
-use crate::fs::http::{HttpBackend, FileEntry};
 use crate::fs::utils::inode_map::InodeMapper;
 use crate::fs::config::FuseConfig;
-use crate::fs::http::{FileEntry, HttpBackend, HttpError};
+use crate::fs::http::{FileEntry, HttpBackend};
 use crate::fs::utils::file_handle::FhManager;
 use fuser::{FileAttr, FileType};
 use std::sync::Arc;

@@ -1,4 +1,7 @@
-use std::collections::{HashMap};
+use std::collections::HashMap;
+use tokio::sync::mpsc;
+use bytes::Bytes;
+use reqwest::Error as ReqwestError;
 
 /// Represents the state of an open file handle
 #[derive(Debug)]

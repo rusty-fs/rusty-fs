@@ -1,8 +1,8 @@
 // FUSE trait implementation for RemoteFileSystem
 
 use crate::fs::remote_fs::RemoteFileSystem;
-use fuser::{Filesystem, ReplyAttr, ReplyDirectory, ReplyEntry, ReplyEmpty, ReplyXattr, Request};
-use libc::{ENOENT, EOPNOTSUPP};
+use fuser::{Filesystem, ReplyAttr, ReplyDirectory, ReplyEntry, ReplyEmpty, ReplyXattr, Request, KernelConfig};
+use libc::ENOENT;
 use std::ffi::OsStr;
 use std::time::SystemTime;
 use tracing::{debug, error, info, trace};
@@ -92,7 +92,7 @@ impl Filesystem for RemoteFileSystem {
         }
     }
 
-    fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: fuser::ReplyOpen) {
+    fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
         debug!("open called for ino {}", ino);
         match self.open(ino) {
             Ok(fh) => {

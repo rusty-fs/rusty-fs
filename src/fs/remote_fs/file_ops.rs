@@ -29,8 +29,23 @@ impl RemoteFileSystem {
         let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
         let client = self.http_client.clone();
         let path_clone = path.clone();
-        runtime::runtime()
-            .block_on(async move { client.read_range(&path_clone, offset, size).await })
+        // Fetch metadata first to determine actual file size and avoid requesting
+        // a range beyond EOF which the server will reject with 416.
+        let meta_res = runtime::runtime().block_on(async move { client.get_file_metadata(&path_clone).await });
+        match meta_res {
+            Ok(meta) => {
+                if offset >= meta.size {
+                    // reading past EOF -> return empty read
+                    return Ok(Vec::new());
+                }
+                let remaining = (meta.size - offset) as usize;
+                let to_read = std::cmp::min(size, remaining);
+                let client = self.http_client.clone();
+                let path_clone = path.clone();
+                return runtime::runtime().block_on(async move { client.read_range(&path_clone, offset, to_read).await });
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Create a file

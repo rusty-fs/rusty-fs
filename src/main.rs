@@ -8,7 +8,7 @@ use std::sync::Arc;
 use fuser::MountOption;
 
 use tracing::{debug, info};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
