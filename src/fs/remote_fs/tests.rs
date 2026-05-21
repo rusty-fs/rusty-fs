@@ -103,17 +103,17 @@ mod tests {
         let fake_ino = fs.get_inode_for_path("/nonexistent.txt");
         assert!(matches!(fs.open(fake_ino), Err(HttpError::NotFound)));
         // read existing file
-        let data = fs.read_bytes(ino, 0, 10).expect("read should succeed");
+        let data = fs.read_bytes(ino, None, 0, 10).expect("read should succeed");
         assert_eq!(data, b"0123456789".to_vec());
         // read with offset and length
-        let part = fs.read_bytes(ino, 2, 5).expect("read should succeed");
+        let part = fs.read_bytes(ino, None, 2, 5).expect("read should succeed");
         assert_eq!(part, b"23456".to_vec());
         // read beyond EOF
-        let beyond = fs.read_bytes(ino, 15, 5).expect("read should succeed");
+        let beyond = fs.read_bytes(ino, None, 15, 5).expect("read should succeed");
         assert_eq!(beyond.len(), 0);
         // read non-existing file
         assert!(matches!(
-            fs.read_bytes(fake_ino, 0, 10),
+            fs.read_bytes(fake_ino, None, 0, 10),
             Err(HttpError::NotFound)
         ));
     }

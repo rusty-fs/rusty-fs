@@ -96,7 +96,6 @@ impl Filesystem for RemoteFileSystem {
         debug!("open called for ino {}", ino);
         match self.open(ino) {
             Ok(fh) => {
-                // Use FOPEN_DIRECT_IO (1 << 0) to bypass page cache so writes are not lost
                 let open_flags = fuser::consts::FOPEN_DIRECT_IO;
                 reply.opened(fh, open_flags);
             }
@@ -125,7 +124,7 @@ impl Filesystem for RemoteFileSystem {
             offset,
             size
         );
-        match self.read_bytes(ino, offset as u64, size as usize) {
+        match self.read_bytes(ino, Some(fh), offset as u64, size as usize) {
             Ok(data) => {
                 reply.data(&data);
             }
@@ -221,7 +220,6 @@ impl Filesystem for RemoteFileSystem {
         );
         match self.create_file(parent, name, mode, umask, flags) {
             Ok((ttl, attr, rdev, fh, mut write_flags)) => {
-                // Use FOPEN_DIRECT_IO to bypass page cache so writes are not lost
                 write_flags |= fuser::consts::FOPEN_DIRECT_IO;
                 reply.created(&ttl, &attr, rdev, fh, write_flags);
             }

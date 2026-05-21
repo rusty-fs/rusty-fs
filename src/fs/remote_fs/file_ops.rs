@@ -16,36 +16,44 @@ impl RemoteFileSystem {
         let client = self.http_client.clone();
         let path_clone = path.clone();
 
-        // Validate file exists
-        runtime::runtime().block_on(async move { client.get_file_metadata(&path_clone).await })?;
+        // Validate file exists and get size
+        let meta = runtime::runtime().block_on(async move { client.get_file_metadata(&path_clone).await })?;
 
         // Allocate and return a file handle
         let fh = self.fh_manager.alloc_fh();
+        if let Some(state) = self.fh_manager.get_fh_state(fh) {
+            state.file_size = Some(meta.size);
+        }
         Ok(fh)
     }
 
     /// Read bytes from a file by inode
-    pub fn read_bytes(&self, ino: u64, offset: u64, size: usize) -> Result<Vec<u8>, HttpError> {
+    pub fn read_bytes(&self, ino: u64, fh: Option<u64>, offset: u64, size: usize) -> Result<Vec<u8>, HttpError> {
         let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
+
+        // Use cached file size from FhState if available, avoiding a metadata HTTP call
+        let file_size = fh.and_then(|fh| self.fh_manager.get_file_size(fh));
+
+        let to_read = if let Some(fsize) = file_size {
+            if offset >= fsize {
+                return Ok(Vec::new());
+            }
+            std::cmp::min(size, (fsize - offset) as usize)
+        } else {
+            // Fallback: fetch metadata to determine file size
+            let client = self.http_client.clone();
+            let path_clone = path.clone();
+            let meta = runtime::runtime().block_on(async move { client.get_file_metadata(&path_clone).await })?;
+            if offset >= meta.size {
+                return Ok(Vec::new());
+            }
+            let remaining = (meta.size - offset) as usize;
+            std::cmp::min(size, remaining)
+        };
+
         let client = self.http_client.clone();
         let path_clone = path.clone();
-        // Fetch metadata first to determine actual file size and avoid requesting
-        // a range beyond EOF which the server will reject with 416.
-        let meta_res = runtime::runtime().block_on(async move { client.get_file_metadata(&path_clone).await });
-        match meta_res {
-            Ok(meta) => {
-                if offset >= meta.size {
-                    // reading past EOF -> return empty read
-                    return Ok(Vec::new());
-                }
-                let remaining = (meta.size - offset) as usize;
-                let to_read = std::cmp::min(size, remaining);
-                let client = self.http_client.clone();
-                let path_clone = path.clone();
-                return runtime::runtime().block_on(async move { client.read_range(&path_clone, offset, to_read).await });
-            }
-            Err(e) => Err(e),
-        }
+        runtime::runtime().block_on(async move { client.read_range(&path_clone, offset, to_read).await })
     }
 
     /// Create a file

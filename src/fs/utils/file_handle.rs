@@ -52,6 +52,11 @@ impl FhManager {
         self.fh_map.get_mut(&fh)
     }
 
+    /// Read-only access to the file size for a handle
+    pub fn get_file_size(&self, fh: u64) -> Option<u64> {
+        self.fh_map.get(&fh).and_then(|s| s.file_size)
+    }
+
     /// Release a file handle
     pub fn release_fh(&mut self, fh: u64) {
         self.fh_map.remove(&fh);
@@ -85,9 +90,8 @@ mod tests {
         let state = manager.get_fh_state(fh);
         assert!(state.is_some());
         let state = state.unwrap();
-        assert_eq!(state.buf.len(), 0);
         assert!(!state.dirty);
-        assert_eq!(state.buf_offset, 0);
+        assert_eq!(state.current_offset, 0);
         assert!(state.file_size.is_none());
     }
 

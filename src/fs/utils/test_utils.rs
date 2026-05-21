@@ -2,7 +2,7 @@
 use crate::fs::http::{FileEntry, HttpBackend, HttpError};
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A fake HTTP backend for testing that stores data in-memory
@@ -187,10 +187,12 @@ impl HttpBackend for FakeBackend {
     async fn put_file_stream(
         &self,
         path: &str,
-        data: Vec<u8>,
+        body: reqwest::Body,
         _offset: Option<u64>,
         _total_size: Option<u64>,
     ) -> Result<(), HttpError> {
+        // Consume the body bytes (works for Body::from(Vec<u8>) and Body::empty())
+        let data = body.as_bytes().map(|b| b.to_vec()).unwrap_or_default();
         let mut contents = self.contents.lock().unwrap();
         contents.insert(path.to_string(), data.clone());
         let mut metadata = self.metadata.lock().unwrap();
@@ -209,6 +211,10 @@ impl HttpBackend for FakeBackend {
                 permissions: Some(0o644),
             },
         );
+        Ok(())
+    }
+
+    async fn rename(&self, _path: &str, _dst: &str) -> Result<(), HttpError> {
         Ok(())
     }
 }
