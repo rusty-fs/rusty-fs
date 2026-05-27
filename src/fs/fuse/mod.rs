@@ -92,9 +92,9 @@ impl Filesystem for RemoteFileSystem {
         }
     }
 
-    fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
-        debug!("open called for ino {}", ino);
-        match self.open(ino) {
+    fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: fuser::ReplyOpen) {
+        debug!("open called for ino {} flags {:o}", ino, flags);
+        match self.open(ino, flags) {
             Ok(fh) => {
                 let open_flags = fuser::consts::FOPEN_DIRECT_IO;
                 reply.opened(fh, open_flags);
@@ -320,44 +320,26 @@ impl Filesystem for RemoteFileSystem {
     ) {
         trace!("flush called for ino {} fh {}", ino, fh);
 
-        let finalization_info = {
-            if let Some(state) = self.fh_manager.get_fh_state(fh) {
-                state.tx = None;
-                if state.dirty {
-                    state.dirty = false;
-                    Some(state.file_size)
-                } else {
-                    None
-                }
-            } else {
-                None
+        // Fase 2: Flush write buffer and check for errors
+        if let Some(path) = self.get_path_for_inode(ino) {
+            if let Err(e) = self.flush_write_buffer(fh, &path) {
+                error!("flush: write buffer flush failed for fh {}: {}", fh, e);
+                reply.error(e.to_errno());
+                return;
             }
-        };
 
-        if let Some(final_file_size) = finalization_info {
-            if let Some(path) = self.get_path_for_inode(ino) {
-                let client = self.http_client.clone();
-                match crate::fs::utils::runtime().block_on(async move {
-                    client
-                        .put_file_stream(&path, reqwest::Body::from(Vec::<u8>::new()), Some(0), final_file_size)
-                        .await
-                }) {
-                    Ok(_) => {
-                        trace!("flush: finalized buffer for fh {} with size {:?}", fh, final_file_size);
-                        reply.ok();
-                    }
-                    Err(e) => {
-                        error!("flush: failed to finalize buffer for fh {}: {}", fh, e);
-                        reply.error(e.to_errno());
-                    }
+            // Check for any pending write errors
+            if let Some(state) = self.fh_manager.get_fh_state(fh) {
+                let errors = state.pending_write_errors.borrow();
+                if !errors.is_empty() {
+                    error!("flush: {} pending write errors for fh {}", errors.len(), fh);
+                    reply.error(libc::EIO);
+                    return;
                 }
-            } else {
-                reply.ok(); // No path found, silently succeed
             }
-        } else {
-            // Nothing to flush, just succeed
-            reply.ok();
         }
+
+        reply.ok();
     }
 
 
@@ -386,30 +368,41 @@ impl Filesystem for RemoteFileSystem {
     ) {
         trace!("release called for fh {}", fh);
 
-        let finalization_info = {
-            if let Some(state) = self.fh_manager.get_fh_state(fh) {
-                // Drop the sender to close the HTTP stream immediately
-                state.tx = None;
-                if state.dirty {
-                    Some(state.file_size)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
+        // Fase 1: Deallocate read buffer
+        if let Some(state) = self.fh_manager.get_fh_state(fh) {
+            *state.read_buf.borrow_mut() = None;
+            *state.read_buf_len.borrow_mut() = 0;
+        }
 
-        if let Some(final_file_size) = finalization_info {
-            if let Some(path) = self.get_path_for_inode(ino) {
-                let client = self.http_client.clone();
-                match crate::fs::utils::runtime().block_on(async move {
-                    client
-                        .put_file_stream(&path, reqwest::Body::from(Vec::<u8>::new()), Some(0), final_file_size)
-                        .await
-                }) {
-                    Ok(_) => trace!("release: finalized fh {} with size {:?}", fh, final_file_size),
-                    Err(e) => error!("release: failed to finalize fh {}: {}", fh, e),
+        // Fase 2: Flush residual write buffer and finalize
+        if let Some(path) = self.get_path_for_inode(ino) {
+            // Flush any remaining buffered data
+            if let Err(e) = self.flush_write_buffer(fh, &path) {
+                error!("release: write buffer flush failed for fh {}: {}", fh, e);
+            }
+
+            // Send finalization PUT with total file size
+            if let Some(state) = self.fh_manager.get_fh_state(fh) {
+                if state.dirty {
+                    if let Some(final_size) = state.file_size {
+                        let client = self.http_client.clone();
+                        let path_clone = path.clone();
+                        if let Err(e) = crate::fs::utils::runtime().block_on(async move {
+                            client
+                                .put_file_stream(&path_clone, reqwest::Body::from(Vec::<u8>::new()), Some(0), Some(final_size))
+                                .await
+                        }) {
+                            error!("release: finalization PUT failed for fh {}: {}", fh, e);
+                        } else {
+                            trace!("release: finalized fh {} with size {}", fh, final_size);
+                        }
+                    }
+                }
+
+                // Check for any pending write errors
+                let errors = state.pending_write_errors.borrow();
+                if !errors.is_empty() {
+                    error!("release: {} pending write errors for fh {}: {:?}", errors.len(), fh, errors);
                 }
             }
         }

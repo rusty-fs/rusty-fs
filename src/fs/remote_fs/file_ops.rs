@@ -2,7 +2,7 @@ use crate::fs::http::FileEntry;
 use crate::fs::http::HttpError;
 use crate::fs::utils::path;
 use crate::fs::utils::runtime;
-use libc::{O_APPEND, O_EXCL, O_TRUNC};
+use libc::{O_APPEND, O_EXCL, O_TRUNC, O_WRONLY};
 use std::ffi::OsStr;
 use std::time::{Duration};
 use tracing::{debug, error};
@@ -11,7 +11,7 @@ use super::RemoteFileSystem;
 
 impl RemoteFileSystem {
     /// Open a file (validate that it exists and allocate a file handle)
-    pub fn open(&mut self, ino: u64) -> Result<u64, HttpError> {
+    pub fn open(&mut self, ino: u64, flags: i32) -> Result<u64, HttpError> {
         let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
         let client = self.http_client.clone();
         let path_clone = path.clone();
@@ -20,7 +20,7 @@ impl RemoteFileSystem {
         let meta = runtime::runtime().block_on(async move { client.get_file_metadata(&path_clone).await })?;
 
         // Allocate and return a file handle
-        let fh = self.fh_manager.alloc_fh();
+        let fh = self.fh_manager.alloc_fh(flags);
         if let Some(state) = self.fh_manager.get_fh_state(fh) {
             state.file_size = Some(meta.size);
         }
@@ -51,6 +51,94 @@ impl RemoteFileSystem {
             std::cmp::min(size, remaining)
         };
 
+        // Fase 1: Read-ahead logic
+        if let Some(fh) = fh {
+            if let Some(state) = self.fh_manager.get_fh_state_ref(fh) {
+                // Skip read buffer for write-only files
+                let is_wronly = (state.open_flags & libc::O_ACCMODE) == O_WRONLY;
+                if !is_wronly {
+                    let cap = state.read_buf_cap;
+
+                    // If requested read is larger than buffer, skip read-ahead
+                    // (would need multiple fetches anyway)
+                    if to_read <= cap {
+                        // Check buffer hit: is [offset, offset+to_read) contained in [buf_offset, buf_offset+buf_len)?
+                        let buf_offset = *state.read_buf_offset.borrow();
+                        let buf_len = *state.read_buf_len.borrow();
+                        let buf_end = buf_offset.saturating_add(buf_len as u64);
+                        let req_end = offset.saturating_add(to_read as u64);
+
+                        if buf_len > 0 && offset >= buf_offset && req_end <= buf_end {
+                            // Cache hit: serve from buffer
+                            let start_idx = (offset - buf_offset) as usize;
+                            let data = state.read_buf.borrow();
+                            let buf_ref = data.as_ref().unwrap();
+                            // Safety check: ensure the range fits
+                            if start_idx + to_read > buf_ref.len() {
+                                // Fallback to direct HTTP read
+                                drop(data);
+                                let client = self.http_client.clone();
+                                let path_clone = path.clone();
+                                return runtime::runtime().block_on(async move {
+                                    client.read_range(&path_clone, offset, to_read).await
+                                });
+                            }
+                            let result = buf_ref[start_idx..start_idx + to_read].to_vec();
+                            tracing::trace!(
+                                "read-ahead HIT: offset={} size={} buf_offset={} buf_len={}",
+                                offset, to_read, buf_offset, buf_len
+                            );
+                            return Ok(result);
+                        }
+
+                        // Cache miss: fetch aligned chunk
+                        let fetch_offset = (offset / cap as u64) * cap as u64;
+                        let fetch_size = std::cmp::min(cap, {
+                            if let Some(fsize) = file_size {
+                                std::cmp::min(cap, (fsize.saturating_sub(fetch_offset)) as usize)
+                            } else {
+                                cap
+                            }
+                        });
+
+                        tracing::trace!(
+                            "read-ahead MISS: fetching offset={} size={} for request offset={} size={}",
+                            fetch_offset, fetch_size, offset, to_read
+                        );
+
+                        let client = self.http_client.clone();
+                        let path_clone = path.clone();
+                        let data = runtime::runtime().block_on(async move {
+                            client.read_range(&path_clone, fetch_offset, fetch_size).await
+                        })?;
+
+                        // Update buffer
+                        *state.read_buf.borrow_mut() = Some(data.clone());
+                        *state.read_buf_offset.borrow_mut() = fetch_offset;
+                        *state.read_buf_len.borrow_mut() = data.len();
+
+                        // Serve from the freshly populated buffer
+                        let start_idx = (offset - fetch_offset) as usize;
+                        // If the requested range doesn't fit in the buffer, fall back to direct HTTP
+                        if start_idx + to_read > data.len() {
+                            tracing::trace!(
+                                "read-ahead: request spans beyond buffer (start_idx={} + to_read={} > buf_len={}), falling back",
+                                start_idx, to_read, data.len()
+                            );
+                            let client = self.http_client.clone();
+                            let path_clone = path.clone();
+                            return runtime::runtime().block_on(async move {
+                                client.read_range(&path_clone, offset, to_read).await
+                            });
+                        }
+                        let result = data[start_idx..start_idx + to_read].to_vec();
+                        return Ok(result);
+                    }
+                }
+            }
+        }
+
+        // Fallback: direct HTTP read (no file handle or write-only file)
         let client = self.http_client.clone();
         let path_clone = path.clone();
         runtime::runtime().block_on(async move { client.read_range(&path_clone, offset, to_read).await })
@@ -145,7 +233,7 @@ impl RemoteFileSystem {
         };
 
         // Allocate file handle without prefetching
-        let fh = self.fh_manager.alloc_fh();
+        let fh = self.fh_manager.alloc_fh(flags);
         if let Some(state) = self.fh_manager.get_fh_state(fh) {
             // Set file size if known, None for new files
             state.file_size = file_exists;
@@ -154,7 +242,7 @@ impl RemoteFileSystem {
         Ok((self.config.ttl, attr, 0, fh, 0))
     }
 
-    /// Write bytes to a file
+    /// Write bytes to a file (Fase 2: buffered writes with synchronous PUT)
     pub fn write_bytes(
         &mut self,
         ino: u64,
@@ -168,66 +256,98 @@ impl RemoteFileSystem {
         let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
         let off = offset as u64;
 
-        let needs_new_stream = {
-            if let Some(state) = self.fh_manager.get_fh_state(fh) {
-                state.tx.is_none() || state.current_offset != off
-            } else {
-                return Err(HttpError::Other("invalid file handle".into()));
+        let state = self.fh_manager
+            .get_fh_state(fh)
+            .ok_or_else(|| HttpError::Other("invalid file handle".into()))?;
+
+        // Check if we need to flush before appending
+        let needs_flush = !state.write_buf.is_empty()
+            && off != state.write_buf_offset + state.write_buf.len() as u64;
+        let will_be_full = state.write_buf.len() + data.len() >= state.write_buf_cap;
+
+        if needs_flush {
+            drop(state); // release borrow before calling flush
+            self.flush_write_buffer(fh, &path)?;
+            // Re-borrow after flush
+            let state = self.fh_manager.get_fh_state(fh).unwrap();
+            if state.write_buf.is_empty() {
+                state.write_buf_offset = off;
             }
-        };
+            state.write_buf.extend_from_slice(data);
+            state.dirty = true;
 
-        if needs_new_stream {
-            // Drop old sender if any
-            if let Some(state) = self.fh_manager.get_fh_state(fh) {
-                state.tx = None;
+            if state.write_buf.len() >= state.write_buf_cap {
+                drop(state);
+                self.flush_write_buffer(fh, &path)?;
             }
+        } else {
+            if state.write_buf.is_empty() {
+                state.write_buf_offset = off;
+            }
+            state.write_buf.extend_from_slice(data);
+            state.dirty = true;
 
-            let (tx, rx) = tokio::sync::mpsc::channel(16);
-            let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-            let body = reqwest::Body::wrap_stream(stream);
-
-            let client = self.http_client.clone();
-            let path_clone = path.clone();
-            let start_offset = off;
-            
-            runtime::runtime().spawn(async move {
-                if let Err(e) = client.put_file_stream(&path_clone, body, Some(start_offset), None).await {
-                    tracing::error!("Streaming upload failed for {}: {}", path_clone, e);
-                }
-            });
-
-            if let Some(state) = self.fh_manager.get_fh_state(fh) {
-                state.tx = Some(tx);
-                state.current_offset = off;
+            if will_be_full {
+                drop(state);
+                self.flush_write_buffer(fh, &path)?;
             }
         }
 
-        // Send data
-        {
-            let state = self.fh_manager.get_fh_state(fh).unwrap();
-            let tx = state.tx.as_ref().unwrap().clone();
-            let data_bytes = bytes::Bytes::copy_from_slice(data);
-            
-            // If send fails, the background task died, probably network error
-            if tx.blocking_send(Ok(data_bytes)).is_err() {
-                state.tx = None; // force new stream next time
-                return Err(HttpError::Network("Upload stream disconnected".into()));
-            }
-
-            state.current_offset += data.len() as u64;
-            state.dirty = true;
-
-            let new_end = state.current_offset;
-            if let Some(size) = state.file_size {
-                if new_end > size {
-                    state.file_size = Some(new_end);
-                }
-            } else {
+        // Update file size
+        let state = self.fh_manager.get_fh_state(fh).unwrap();
+        let new_end = state.write_buf_offset + state.write_buf.len() as u64;
+        if let Some(size) = state.file_size {
+            if new_end > size {
                 state.file_size = Some(new_end);
             }
+        } else {
+            state.file_size = Some(new_end);
         }
 
         Ok(data.len() as u32)
+    }
+
+    /// Flush the write buffer to the server synchronously
+    pub(crate) fn flush_write_buffer(&mut self, fh: u64, path: &str) -> Result<(), HttpError> {
+        let state = self.fh_manager
+            .get_fh_state(fh)
+            .ok_or_else(|| HttpError::Other("invalid file handle".into()))?;
+
+        if state.write_buf.is_empty() {
+            return Ok(());
+        }
+
+        let buf = std::mem::take(&mut state.write_buf);
+        let offset = state.write_buf_offset;
+        let buf_len = buf.len();
+
+        tracing::info!(
+            "[DIAG] flush_write_buffer: path={} offset={} size={}",
+            path, offset, buf_len
+        );
+
+        let client = self.http_client.clone();
+        let path_clone = path.to_string();
+        let result = runtime::runtime().block_on(async move {
+            client
+                .put_file_stream(&path_clone, reqwest::Body::from(buf), Some(offset), None)
+                .await
+        });
+
+        if let Err(e) = result {
+            state.pending_write_errors.borrow_mut().push(format!("PUT at offset {}: {}", offset, e));
+            tracing::error!("[DIAG] flush_write_buffer FAILED: path={} offset={} error={}", path, offset, e);
+            return Err(e);
+        }
+
+        tracing::info!(
+            "[DIAG] flush_write_buffer OK: path={} offset={} size={}",
+            path, offset, buf_len
+        );
+
+        // Advance buffer offset by actual bytes written
+        state.write_buf_offset += buf_len as u64;
+        Ok(())
     }
 
 

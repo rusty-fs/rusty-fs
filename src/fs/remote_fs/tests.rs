@@ -98,10 +98,10 @@ mod tests {
 
         // open existing file
         let ino = fs.get_inode_for_path("/f.txt");
-        assert!(fs.open(ino).is_ok());
+        assert!(fs.open(ino, libc::O_RDONLY).is_ok());
         // open non-existing file
         let fake_ino = fs.get_inode_for_path("/nonexistent.txt");
-        assert!(matches!(fs.open(fake_ino), Err(HttpError::NotFound)));
+        assert!(matches!(fs.open(fake_ino, libc::O_RDONLY), Err(HttpError::NotFound)));
         // read existing file
         let data = fs.read_bytes(ino, None, 0, 10).expect("read should succeed");
         assert_eq!(data, b"0123456789".to_vec());

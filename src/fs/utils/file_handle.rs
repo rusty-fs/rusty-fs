@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::cell::RefCell;
 use tokio::sync::mpsc;
 use bytes::Bytes;
 use reqwest::Error as ReqwestError;
@@ -6,20 +7,37 @@ use reqwest::Error as ReqwestError;
 /// Represents the state of an open file handle
 #[derive(Debug)]
 pub struct FhState {
-    /// Active channel sender for streaming FUSE writes to the server
-    pub tx: Option<mpsc::Sender<Result<Bytes, ReqwestError>>>,
-    /// Expected offset for the next write to be contiguous
-    pub current_offset: u64,
-    /// Whether this file has been modified
-    pub dirty: bool,
+    /// Open flags (e.g. O_RDONLY, O_WRONLY, O_RDWR)
+    pub open_flags: i32,
     /// File size known from metadata (None if new file)
     pub file_size: Option<u64>,
+
+    // Fase 1 — Read-ahead buffer (RefCell for interior mutability since read_bytes takes &self)
+    pub read_buf: RefCell<Option<Vec<u8>>>,
+    pub read_buf_offset: RefCell<u64>,
+    pub read_buf_len: RefCell<usize>,
+    pub read_buf_cap: usize,
+
+    // Fase 2 — Write batching buffer
+    pub write_buf: Vec<u8>,
+    pub write_buf_offset: u64,
+    pub write_buf_cap: usize,
+    /// Track errors from pending PUT operations
+    pub pending_write_errors: RefCell<Vec<String>>,
+    /// Whether any write has been attempted (for release flush)
+    pub dirty: bool,
+
+    // Legacy streaming field (kept for backward compat, unused in Fase 2)
+    pub tx: Option<mpsc::Sender<Result<Bytes, ReqwestError>>>,
+    pub current_offset: u64,
 }
 
 /// Manages file handles and their associated state
 pub struct FhManager {
     next_fh: u64,
     fh_map: HashMap<u64, FhState>,
+    read_buf_cap: usize,
+    write_buf_cap: usize,
 }
 
 impl FhManager {
@@ -28,20 +46,41 @@ impl FhManager {
         Self {
             next_fh: 1,
             fh_map: HashMap::new(),
+            read_buf_cap: 4 * 1024 * 1024, // 4 MB default
+            write_buf_cap: 1 * 1024 * 1024, // 1 MB default
+        }
+    }
+
+    /// Create with custom buffer sizes
+    pub fn with_buffer_sizes(read_buf_cap: usize, write_buf_cap: usize) -> Self {
+        Self {
+            next_fh: 1,
+            fh_map: HashMap::new(),
+            read_buf_cap,
+            write_buf_cap,
         }
     }
 
     /// Allocate a new file handle with empty state
-    pub fn alloc_fh(&mut self) -> u64 {
+    pub fn alloc_fh(&mut self, open_flags: i32) -> u64 {
         let fh = self.next_fh;
         self.next_fh += 1;
         self.fh_map.insert(
             fh,
             FhState {
+                open_flags,
+                file_size: None,
+                read_buf: RefCell::new(None),
+                read_buf_offset: RefCell::new(0),
+                read_buf_len: RefCell::new(0),
+                read_buf_cap: self.read_buf_cap,
+                write_buf: Vec::new(),
+                write_buf_offset: 0,
+                write_buf_cap: self.write_buf_cap,
+                pending_write_errors: RefCell::new(Vec::new()),
+                dirty: false,
                 tx: None,
                 current_offset: 0,
-                dirty: false,
-                file_size: None,
             },
         );
         fh
@@ -50,6 +89,11 @@ impl FhManager {
     /// Get mutable reference to file handle state
     pub fn get_fh_state(&mut self, fh: u64) -> Option<&mut FhState> {
         self.fh_map.get_mut(&fh)
+    }
+
+    /// Read-only access to file handle state (for read_bytes which takes &self)
+    pub fn get_fh_state_ref(&self, fh: u64) -> Option<&FhState> {
+        self.fh_map.get(&fh)
     }
 
     /// Read-only access to the file size for a handle
@@ -76,8 +120,8 @@ mod tests {
     #[test]
     fn test_alloc_fh() {
         let mut manager = FhManager::new();
-        let fh1 = manager.alloc_fh();
-        let fh2 = manager.alloc_fh();
+        let fh1 = manager.alloc_fh(0);
+        let fh2 = manager.alloc_fh(0);
         assert_ne!(fh1, fh2);
         assert_eq!(fh1, 1);
         assert_eq!(fh2, 2);
@@ -86,19 +130,19 @@ mod tests {
     #[test]
     fn test_get_fh_state() {
         let mut manager = FhManager::new();
-        let fh = manager.alloc_fh();
+        let fh = manager.alloc_fh(0);
         let state = manager.get_fh_state(fh);
         assert!(state.is_some());
         let state = state.unwrap();
         assert!(!state.dirty);
-        assert_eq!(state.current_offset, 0);
         assert!(state.file_size.is_none());
+        assert!(state.write_buf.is_empty());
     }
 
     #[test]
     fn test_release_fh() {
         let mut manager = FhManager::new();
-        let fh = manager.alloc_fh();
+        let fh = manager.alloc_fh(0);
         assert!(manager.get_fh_state(fh).is_some());
         manager.release_fh(fh);
         assert!(manager.get_fh_state(fh).is_none());

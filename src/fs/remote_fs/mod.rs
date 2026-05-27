@@ -52,7 +52,7 @@ impl RemoteFileSystem {
         Self {
             http_client: client,
             inode_mapper: InodeMapper::new(),
-            fh_manager: FhManager::new(),
+            fh_manager: FhManager::with_buffer_sizes(config.max_buffer_size, config.chunk_size),
             config,
             disable_cache,
             negative_lookup: RwLock::new(HashMap::new()),
