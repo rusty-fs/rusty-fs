@@ -139,8 +139,8 @@ mod tests {
     #[test]
     fn test_alloc_fh() {
         let mut manager = FhManager::new();
-        let fh1 = manager.alloc_fh(0);
-        let fh2 = manager.alloc_fh(0);
+        let fh1 = manager.alloc_fh(0, 0);
+        let fh2 = manager.alloc_fh(0, 0);
         assert_ne!(fh1, fh2);
         assert_eq!(fh1, 1);
         assert_eq!(fh2, 2);
@@ -149,7 +149,7 @@ mod tests {
     #[test]
     fn test_get_fh_state() {
         let mut manager = FhManager::new();
-        let fh = manager.alloc_fh(0);
+        let fh = manager.alloc_fh(0, 0);
         let state = manager.get_fh_state(fh);
         assert!(state.is_some());
         let state = state.unwrap();
@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn test_release_fh() {
         let mut manager = FhManager::new();
-        let fh = manager.alloc_fh(0);
+        let fh = manager.alloc_fh(0, 0);
         assert!(manager.get_fh_state(fh).is_some());
         manager.release_fh(fh);
         assert!(manager.get_fh_state(fh).is_none());
