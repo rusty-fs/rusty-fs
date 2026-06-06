@@ -511,3 +511,6 @@ struct FileEntry {
     modified: Option<u64>,
     permissions: Option<u32>,
 }
+
+#[cfg(test)]
+mod tests;
