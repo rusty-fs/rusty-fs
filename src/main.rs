@@ -29,7 +29,20 @@ async fn main() {
     // build our application with a route
     let app = build_app(shared_base_dir);
 
-    // run our app with hyper, listening globally on port 3000
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    // Parse --port argument
+    let mut port = 3000;
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|x| x == "--port") {
+        if pos + 1 < args.len() {
+            if let Ok(p) = args[pos + 1].parse::<u16>() {
+                port = p;
+            }
+        }
+    }
+
+    // run our app with hyper, listening globally on the specified port
+    let addr = format!("0.0.0.0:{}", port);
+    debug!("Listening on {}", addr);
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }

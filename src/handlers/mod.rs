@@ -132,7 +132,7 @@ pub async fn meta(
             Ok(Json(serde_json::to_value(&entry).unwrap()))
         }
         Err(e) => {
-            error!("Failed to get metadata for {:?}: {}", full_path, e);
+            debug!("Failed to get metadata for {:?}: {}", full_path, e);
             Err(StatusCode::NOT_FOUND)
         }
     }
@@ -510,4 +510,50 @@ struct FileEntry {
     size: u64,
     modified: Option<u64>,
     permissions: Option<u32>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct RenameRequest {
+    new_name: String,
+}
+
+pub async fn rename(
+    file_path: Path<String>,
+    Extension(base_dir): Extension<Arc<String>>,
+    Json(payload): Json<RenameRequest>,
+) -> Result<StatusCode, StatusCode> {
+    let requested_raw = file_path.0;
+    if requested_raw.contains("..") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let requested = requested_raw.trim_start_matches('/').to_string();
+    if requested.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let full_path = PathBuf::from(base_dir.trim_end_matches('/')).join(&requested);
+
+    let dst_raw = payload.new_name;
+    if dst_raw.contains("..") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let dst_requested = dst_raw.trim_start_matches('/').to_string();
+    if dst_requested.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let full_dst_path = PathBuf::from(base_dir.trim_end_matches('/')).join(&dst_requested);
+
+    debug!("Renaming {} to {}", requested, dst_requested);
+
+    if let Some(parent) = full_dst_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    match tokio::fs::rename(&full_path, &full_dst_path).await {
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => {
+            error!("Failed to rename {:?} to {:?}: {}", full_path, full_dst_path, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }

@@ -1,8 +1,8 @@
-use crate::handlers::{delete_path, list, meta, mkdir, put_file, read};
+use crate::handlers::{delete_path, list, meta, mkdir, put_file, read, rename};
 use axum::extract::DefaultBodyLimit;
 use axum::{
     Extension, Router,
-    routing::{delete, get, post, put},
+    routing::{delete, get, post, put, patch},
 };
 use std::sync::Arc;
 use tower_http::trace::{self, TraceLayer};
@@ -18,6 +18,7 @@ pub fn build_app(shared_base_dir: Arc<String>) -> Router {
         .route("/mkdir/{*file_path}", post(mkdir))
         .route("/files/{*file_path}", delete(delete_path))
         .route("/files/{*file_path}", put(put_file))
+        .route("/files/{*file_path}", patch(rename))
         .layer(Extension(shared_base_dir))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB limit
         .layer(
