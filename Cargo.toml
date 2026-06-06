@@ -31,3 +31,4 @@ indexmap = "1.9"
 
 [dev-dependencies]
 httpmock = "0.8.1"
+proptest = "1.4"
