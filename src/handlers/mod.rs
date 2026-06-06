@@ -395,24 +395,7 @@ pub async fn put_file(
         .and_then(|s| s.parse::<u64>().ok());
     let is_empty_body = content_length == Some(0);
 
-    // Handle empty body with total_size: this is a finalize operation
-    if is_empty_body && total_size.is_some() {
-        debug!(
-            "Finalize request detected, truncating file to size {}",
-            total_size.unwrap()
-        );
-        let mut f = tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .open(&full_path)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        f.set_len(total_size.unwrap()).await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        f.sync_all().await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    } else if should_truncate {
+    if should_truncate {
         debug!("Full write detected, truncating file if it exists");
         let mut tmp_path = full_path.clone();
         tmp_path.set_extension(format!(
@@ -447,7 +430,6 @@ pub async fn put_file(
         let mut f = f.into_inner();
         
         // Only fsync if body is not empty (non-trivial write)
-        // Empty writes are just file creation/truncation - will be finalized later
         if !is_empty_body {
             f.sync_all().await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -456,13 +438,18 @@ pub async fn put_file(
 
         tokio::fs::rename(&tmp_path, &full_path).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     } else {
-        trace!("Partial write detected at offset {}", offset);
+        trace!("Partial write detected at offset {}, total_size {:?}", offset, total_size);
         let mut f = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .open(&full_path)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        // If total_size is known, update file length to match it
+        if let Some(ts) = total_size {
+            f.set_len(ts).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
 
         f.seek(SeekFrom::Start(offset)).await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -482,10 +469,7 @@ pub async fn put_file(
         }
         
         f.flush().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        
-        // Don't sync on every partial write - let OS buffer writes
-        // Only sync on finalization (when total_size is known)
-        // Drop file to flush buffers without explicit fsync
+        f.into_inner().sync_all().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
 
     if existed {
