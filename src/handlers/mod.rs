@@ -557,3 +557,6 @@ pub async fn rename(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
