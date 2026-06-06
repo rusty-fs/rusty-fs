@@ -135,6 +135,7 @@ impl Default for FhManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn test_alloc_fh() {
@@ -165,5 +166,45 @@ mod tests {
         assert!(manager.get_fh_state(fh).is_some());
         manager.release_fh(fh);
         assert!(manager.get_fh_state(fh).is_none());
+    }
+
+    proptest! {
+        #[test]
+        fn prop_alloc_and_release(ino in any::<u64>(), flags in any::<i32>()) {
+            let mut manager = FhManager::new();
+            let fh = manager.alloc_fh(ino, flags);
+            let state = manager.get_fh_state_ref(fh).unwrap();
+            assert_eq!(state.ino, ino);
+            assert_eq!(state.open_flags, flags);
+            manager.release_fh(fh);
+            assert!(manager.get_fh_state_ref(fh).is_none());
+        }
+
+        #[test]
+        fn prop_multiple_fhs_for_inode(ino in any::<u64>(), count in 1..50usize) {
+            let mut manager = FhManager::new();
+            let mut fhs = Vec::new();
+            for _ in 0..count {
+                fhs.push(manager.alloc_fh(ino, 0));
+            }
+            let retrieved_fhs = manager.get_fhs_for_inode(ino);
+            assert_eq!(retrieved_fhs.len(), count);
+            for fh in fhs {
+                assert!(retrieved_fhs.contains(&fh));
+            }
+        }
+        
+        #[test]
+        fn prop_file_size_tracking(ino in any::<u64>(), sizes in proptest::collection::vec(any::<u64>(), 1..10)) {
+            let mut manager = FhManager::new();
+            for (i, &size) in sizes.iter().enumerate() {
+                let fh = manager.alloc_fh(ino, 0);
+                if i % 2 == 0 {
+                    manager.get_fh_state(fh).unwrap().file_size = Some(size);
+                }
+            }
+            let max_size = sizes.iter().enumerate().filter(|(i, _)| i % 2 == 0).map(|(_, &s)| s).max();
+            assert_eq!(manager.get_file_size_by_inode(ino), max_size);
+        }
     }
 }

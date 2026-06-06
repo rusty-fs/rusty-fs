@@ -86,6 +86,7 @@ impl Default for InodeMapper {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn test_new_mapper_has_root() {
@@ -128,5 +129,36 @@ mod tests {
         assert_eq!(mapper.path_for(FUSE_ROOT_ID), Some("/".to_string()));
         assert!(!mapper.contains("/file1.txt"));
         assert!(!mapper.contains("/file2.txt"));
+    }
+
+    proptest! {
+        #[test]
+        fn prop_get_or_create_inode_deterministic(path in "/[a-zA-Z0-9_]+(/[a-zA-Z0-9_]+)*") {
+            let mut mapper = InodeMapper::new();
+            let ino1 = mapper.get_or_create_inode(&path);
+            let ino2 = mapper.get_or_create_inode(&path);
+            assert_eq!(ino1, ino2);
+            assert_eq!(mapper.path_for(ino1), Some(path));
+        }
+
+        #[test]
+        fn prop_rename_preserves_inode(old_path in "/[a-z]+", new_path in "/[A-Z]+") {
+            let mut mapper = InodeMapper::new();
+            let ino1 = mapper.get_or_create_inode(&old_path);
+            mapper.rename(&old_path, &new_path);
+            let ino2 = mapper.get_or_create_inode(&new_path);
+            assert_eq!(ino1, ino2);
+            assert!(!mapper.contains(&old_path));
+        }
+
+        #[test]
+        fn prop_remove_clears_mapping(path in "/[a-zA-Z0-9_]+") {
+            let mut mapper = InodeMapper::new();
+            let ino = mapper.get_or_create_inode(&path);
+            assert!(mapper.contains(&path));
+            mapper.remove(&path);
+            assert!(!mapper.contains(&path));
+            assert_eq!(mapper.path_for(ino), None);
+        }
     }
 }
