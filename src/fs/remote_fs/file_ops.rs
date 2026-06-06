@@ -17,10 +17,21 @@ impl RemoteFileSystem {
         let path_clone = path.clone();
 
         // Validate file exists and get size
-        let meta = runtime::runtime().block_on(async move { client.get_file_metadata(&path_clone).await })?;
+        let mut meta = runtime::runtime().block_on(async move { client.get_file_metadata(&path_clone).await })?;
+
+        let truncate = (flags & O_TRUNC) != 0;
+        if truncate {
+            let client2 = self.http_client.clone();
+            let path2 = path.clone();
+            runtime::runtime().block_on(async move {
+                client2.put_file_stream(&path2, reqwest::Body::from(Vec::<u8>::new()), None, None).await
+            })?;
+            meta.size = 0;
+            self.metadata_cache_insert(&path, meta.clone());
+        }
 
         // Allocate and return a file handle
-        let fh = self.fh_manager.alloc_fh(flags);
+        let fh = self.fh_manager.alloc_fh(ino, flags);
         if let Some(state) = self.fh_manager.get_fh_state(fh) {
             state.file_size = Some(meta.size);
         }
@@ -233,12 +244,20 @@ impl RemoteFileSystem {
         };
 
         // Allocate file handle without prefetching
-        let fh = self.fh_manager.alloc_fh(flags);
+        let fh = self.fh_manager.alloc_fh(ino, flags);
         if let Some(state) = self.fh_manager.get_fh_state(fh) {
             // Set file size if known, None for new files
             state.file_size = file_exists;
             state.current_offset = 0;
         }
+
+        // Update metadata cache if truncated or newly created
+        if truncate || file_exists.is_none() {
+            let mut new_meta = entry.clone();
+            new_meta.size = 0;
+            self.metadata_cache_insert(&full_path, new_meta);
+        }
+
         Ok((self.config.ttl, attr, 0, fh, 0))
     }
 
@@ -372,30 +391,37 @@ impl RemoteFileSystem {
         if let Some(new_size) = size {
             debug!("truncating file {} to size {}", path, new_size);
 
-            // For truncate, we need to send the new size to the server
-            // If new_size is 0, send empty file
-            // If new_size > 0, we need to either pad with zeros or get the existing data
-            let current_data = if new_size == 0 {
-                Vec::new()
-            } else {
-                // Read what we need up to new_size
-                // For large truncations, we don't want to load entire file
-                // Instead, let server handle it by sending a special truncate marker
-                // For now, we'll send an empty body with Content-Range to signal truncate
-                Vec::new()
-            };
+            // Flush all open file handles for this inode before truncation
+            let fhs = self.fh_manager.get_fhs_for_inode(ino);
+            for fh in fhs {
+                let _ = self.flush_write_buffer(fh, &path);
+                // Also update the file size in the handle state
+                if let Some(state) = self.fh_manager.get_fh_state(fh) {
+                    state.file_size = Some(new_size);
+                    state.dirty = false;
+                }
+            }
 
             let client = self.http_client.clone();
             let path_clone = path.clone();
-            let data_clone = current_data;
 
             match runtime::runtime().block_on(async move {
                 // Send with size hint so server knows this is a size-setting operation
                 client
-                    .put_file_stream(&path_clone, reqwest::Body::from(data_clone), Some(0), Some(new_size))
+                    .put_file_stream(&path_clone, reqwest::Body::from(Vec::<u8>::new()), Some(0), Some(new_size))
                     .await
             }) {
                 Ok(_) => {
+                    // Update metadata cache immediately
+                    if let Ok(mut meta) = self.getattr(ino) {
+                        meta.size = new_size;
+                        // We need a FileEntry for the cache, let's just fetch it to be sure
+                        let c2 = self.http_client.clone();
+                        let p2 = path.clone();
+                        if let Ok(entry) = runtime::runtime().block_on(async move { c2.get_file_metadata(&p2).await }) {
+                            self.metadata_cache_insert(&path, entry);
+                        }
+                    }
                     // After truncation, get updated attributes
                     return self.getattr(ino);
                 }

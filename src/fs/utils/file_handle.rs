@@ -7,6 +7,8 @@ use reqwest::Error as ReqwestError;
 /// Represents the state of an open file handle
 #[derive(Debug)]
 pub struct FhState {
+    /// Inode this handle belongs to
+    pub ino: u64,
     /// Open flags (e.g. O_RDONLY, O_WRONLY, O_RDWR)
     pub open_flags: i32,
     /// File size known from metadata (None if new file)
@@ -62,12 +64,13 @@ impl FhManager {
     }
 
     /// Allocate a new file handle with empty state
-    pub fn alloc_fh(&mut self, open_flags: i32) -> u64 {
+    pub fn alloc_fh(&mut self, ino: u64, open_flags: i32) -> u64 {
         let fh = self.next_fh;
         self.next_fh += 1;
         self.fh_map.insert(
             fh,
             FhState {
+                ino,
                 open_flags,
                 file_size: None,
                 read_buf: RefCell::new(None),
@@ -94,6 +97,22 @@ impl FhManager {
     /// Read-only access to file handle state (for read_bytes which takes &self)
     pub fn get_fh_state_ref(&self, fh: u64) -> Option<&FhState> {
         self.fh_map.get(&fh)
+    }
+
+    /// Get all file handles for a given inode
+    pub fn get_fhs_for_inode(&self, ino: u64) -> Vec<u64> {
+        self.fh_map.iter()
+            .filter(|(_, state)| state.ino == ino)
+            .map(|(&fh, _)| fh)
+            .collect()
+    }
+
+    /// Get the latest file size across all handles for an inode
+    pub fn get_file_size_by_inode(&self, ino: u64) -> Option<u64> {
+        self.fh_map.values()
+            .filter(|state| state.ino == ino)
+            .filter_map(|state| state.file_size)
+            .max()
     }
 
     /// Read-only access to the file size for a handle

@@ -100,8 +100,15 @@ impl RemoteFileSystem {
 
         let client = self.http_client.clone();
         let path_clone = path.clone();
+
+        // Use precise size if we have it in write state
+        let current_size = self.fh_manager.get_file_size_by_inode(ino);
+
         // Try metadata cache first
-        if let Some(cached) = self.metadata_cache_get(&path) {
+        if let Some(mut cached) = self.metadata_cache_get(&path) {
+            if let Some(s) = current_size {
+                cached.size = s;
+            }
             return Ok(self.file_entry_to_attr(&cached, ino));
         }
 
@@ -129,7 +136,11 @@ impl RemoteFileSystem {
         // Insert into metadata cache for future getattr calls
         self.metadata_cache_insert(&path, res.clone());
 
-        Ok(self.file_entry_to_attr(&res, ino))
+        let mut attr = self.file_entry_to_attr(&res, ino);
+        if let Some(s) = current_size {
+            attr.size = s;
+        }
+        Ok(attr)
     }
 
     /// List directory contents
