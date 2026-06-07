@@ -8,11 +8,10 @@ use axum::{
     },
     response::{IntoResponse, Response},
 };
-use bytes::Bytes;
 use serde::Serialize;
 use serde_json::json;
 use std::fs;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::SeekFrom;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -427,7 +426,7 @@ pub async fn put_file(
         }
         
         f.flush().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let mut f = f.into_inner();
+        let f = f.into_inner();
         
         // Only fsync if body is not empty (non-trivial write)
         if !is_empty_body {
