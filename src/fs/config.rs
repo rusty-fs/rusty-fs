@@ -31,12 +31,12 @@ impl FuseConfig {
         let max_buffer_size = std::env::var("MOUNTY_MAX_BUFFER_SIZE")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(4 * 1024 * 1024); // 4 MB
+            .unwrap_or(8 * 1024 * 1024); // 8 MB
 
         let chunk_size = std::env::var("MOUNTY_CHUNK_SIZE")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(1024 * 1024); // 1 MB
+            .unwrap_or(4 * 1024 * 1024); // 4 MB
 
         let listing_cache_ttl_ms = std::env::var("MOUNTY_LISTING_CACHE_TTL_MS")
             .ok()
@@ -92,8 +92,8 @@ impl Default for FuseConfig {
     fn default() -> Self {
         Self {
             ttl: Duration::from_secs(1),
-            max_buffer_size: 4 * 1024 * 1024, // 4 MB
-            chunk_size: 1024 * 1024, // 1 MB
+            max_buffer_size: 8 * 1024 * 1024, // 8 MB
+            chunk_size: 4 * 1024 * 1024, // 4 MB
             listing_cache_ttl: Duration::from_millis(500),
             listing_cache_capacity: 1024,
         }
@@ -108,8 +108,8 @@ mod tests {
     fn test_default_config() {
         let config = FuseConfig::default();
         assert_eq!(config.ttl, Duration::from_secs(1));
-        assert_eq!(config.max_buffer_size, 4 * 1024 * 1024);
-        assert_eq!(config.chunk_size, 1024 * 1024);
+        assert_eq!(config.max_buffer_size, 8 * 1024 * 1024);
+        assert_eq!(config.chunk_size, 4 * 1024 * 1024);
     }
 
     #[test]
@@ -120,6 +120,6 @@ mod tests {
 
         assert_eq!(config.ttl, Duration::from_secs(5));
         assert_eq!(config.max_buffer_size, 2 * 1024 * 1024);
-        assert_eq!(config.chunk_size, 1024 * 1024); // unchanged
+        assert_eq!(config.chunk_size, 4 * 1024 * 1024); // unchanged
     }
 }
