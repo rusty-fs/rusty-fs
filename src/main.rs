@@ -1,6 +1,6 @@
+#![allow(dead_code)]
 mod fs;
 
-use fs::FuseConfig;
 use fs::HttpClient;
 use fs::RemoteFileSystem;
 use std::sync::Arc;

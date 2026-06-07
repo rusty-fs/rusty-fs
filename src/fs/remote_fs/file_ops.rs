@@ -285,7 +285,7 @@ impl RemoteFileSystem {
         let will_be_full = state.write_buf.len() + data.len() >= state.write_buf_cap;
 
         if needs_flush {
-            drop(state); // release borrow before calling flush
+            // state borrow released by NLL before calling flush
             self.flush_write_buffer(fh, &path)?;
             // Re-borrow after flush
             let state = self.fh_manager.get_fh_state(fh).unwrap();
@@ -296,7 +296,7 @@ impl RemoteFileSystem {
             state.dirty = true;
 
             if state.write_buf.len() >= state.write_buf_cap {
-                drop(state);
+                // state borrow released by NLL
                 self.flush_write_buffer(fh, &path)?;
             }
         } else {
@@ -307,7 +307,7 @@ impl RemoteFileSystem {
             state.dirty = true;
 
             if will_be_full {
-                drop(state);
+                // state borrow released by NLL
                 self.flush_write_buffer(fh, &path)?;
             }
         }
