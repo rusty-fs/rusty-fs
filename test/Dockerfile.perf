@@ -1,0 +1,22 @@
+FROM rust:1.76-slim
+
+# Install necessary dependencies
+RUN apt-get update && apt-get install -y \
+    iperf3 \
+    fuse3 \
+    iproute2 \
+    bc \
+    coreutils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create working directory
+WORKDIR /app
+
+# Copy project files
+COPY . .
+
+# Set execution permissions on the test script
+RUN chmod +x ./test/run_perf_tests.sh
+
+# Run the performance tests (optionally with bw-limit, configurable via compose)
+CMD ["./test/run_perf_tests.sh"]

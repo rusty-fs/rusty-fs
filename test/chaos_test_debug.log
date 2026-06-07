@@ -1,0 +1,324 @@
+   Compiling remote-fs-server v0.1.0 (/Users/matteogastaldello/Documents/uni/pds/proj/filer)
+warning: unused import: `bytes::Bytes`
+  --> src/handlers/mod.rs:11:5
+   |
+11 | use bytes::Bytes;
+   |     ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: variable does not need to be mutable
+   --> src/handlers/mod.rs:430:13
+    |
+430 |         let mut f = f.into_inner();
+    |             ----^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: unused import: `Seek`
+  --> src/handlers/mod.rs:15:15
+   |
+15 | use std::io::{Seek, SeekFrom, Write};
+   |               ^^^^
+
+warning: unused import: `Write`
+  --> src/handlers/mod.rs:15:31
+   |
+15 | use std::io::{Seek, SeekFrom, Write};
+   |                               ^^^^^
+
+warning: `remote-fs-server` (bin "remote-fs-server") generated 4 warnings (run `cargo fix --bin "remote-fs-server"` to apply 2 suggestions)
+    Finished `release` profile [optimized] target(s) in 2.25s
+warning: unused import: `fs::FuseConfig`
+ --> src/main.rs:3:5
+  |
+3 | use fs::FuseConfig;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: associated items `new`, `with_ttl`, `with_max_buffer_size`, `with_chunk_size`, `with_listing_cache_ttl_ms`, and `with_listing_cache_capacity` are never used
+  --> src/fs/config.rs:20:12
+   |
+18 | impl FuseConfig {
+   | --------------- associated items in this implementation
+19 |     /// Create a new config with default values
+20 |     pub fn new() -> Self {
+   |            ^^^
+...
+61 |     pub fn with_ttl(mut self, ttl: Duration) -> Self {
+   |            ^^^^^^^^
+...
+67 |     pub fn with_max_buffer_size(mut self, size: usize) -> Self {
+   |            ^^^^^^^^^^^^^^^^^^^^
+...
+73 |     pub fn with_chunk_size(mut self, size: usize) -> Self {
+   |            ^^^^^^^^^^^^^^^
+...
+79 |     pub fn with_listing_cache_ttl_ms(mut self, ms: u64) -> Self {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+85 |     pub fn with_listing_cache_capacity(mut self, cap: usize) -> Self {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: variant `PermissionDenied` is never constructed
+  --> src/fs/http/client.rs:14:5
+   |
+10 | pub enum HttpError {
+   |          --------- variant in this enum
+...
+14 |     PermissionDenied,
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `HttpError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: associated function `new` is never used
+  --> src/fs/remote_fs/mod.rs:39:12
+   |
+38 | impl RemoteFileSystem {
+   | --------------------- associated function in this implementation
+39 |     pub fn new(client: Arc<dyn HttpBackend>) -> Self {
+   |            ^^^
+
+warning: field `tx` is never read
+  --> src/fs/utils/file_handle.rs:33:9
+   |
+9  | pub struct FhState {
+   |            ------- field in this struct
+...
+33 |     pub tx: Option<mpsc::Sender<Result<Bytes, ReqwestError>>>,
+   |         ^^
+   |
+   = note: `FhState` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: methods `remove`, `contains`, and `clear_except_root` are never used
+  --> src/fs/utils/inode_map.rs:44:12
+   |
+13 | impl InodeMapper {
+   | ---------------- methods in this implementation
+...
+44 |     pub fn remove(&mut self, path: &str) {
+   |            ^^^^^^
+...
+65 |     pub fn contains(&self, path: &str) -> bool {
+   |            ^^^^^^^^
+...
+70 |     pub fn clear_except_root(&mut self) {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: calls to `std::mem::drop` with a reference instead of an owned value does nothing
+   --> src/fs/remote_fs/file_ops.rs:288:13
+    |
+288 |             drop(state); // release borrow before calling flush
+    |             ^^^^^-----^
+    |                  |
+    |                  argument has type `&mut FhState`
+    |
+    = note: `#[warn(dropping_references)]` on by default
+help: use `let _ = ...` to ignore the expression or result
+    |
+288 -             drop(state); // release borrow before calling flush
+288 +             let _ = state; // release borrow before calling flush
+    |
+
+warning: calls to `std::mem::drop` with a reference instead of an owned value does nothing
+   --> src/fs/remote_fs/file_ops.rs:299:17
+    |
+299 |                 drop(state);
+    |                 ^^^^^-----^
+    |                      |
+    |                      argument has type `&mut FhState`
+    |
+help: use `let _ = ...` to ignore the expression or result
+    |
+299 -                 drop(state);
+299 +                 let _ = state;
+    |
+
+warning: calls to `std::mem::drop` with a reference instead of an owned value does nothing
+   --> src/fs/remote_fs/file_ops.rs:310:17
+    |
+310 |                 drop(state);
+    |                 ^^^^^-----^
+    |                      |
+    |                      argument has type `&mut FhState`
+    |
+help: use `let _ = ...` to ignore the expression or result
+    |
+310 -                 drop(state);
+310 +                 let _ = state;
+    |
+
+warning: `mounty` (bin "mounty") generated 9 warnings (run `cargo fix --bin "mounty"` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.12s
+[2m2026-06-06T15:58:51.041529Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_15/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.051534Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_1/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.059803Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_16/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.077381Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_5/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.081936Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_10/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.101933Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_19/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.133695Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_8/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.193752Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_15/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.199610Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_13/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.218395Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_0/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.229260Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_11/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.259980Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_17/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.263775Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_16/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.267835Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_14/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.276751Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_5/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.281781Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_7/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.286059Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_6/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.290830Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_10/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.299648Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_3/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.313868Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_2/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.362742Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_19/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.459724Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_4/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.464909Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_9/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.469776Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_12/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.474955Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_18/file_0.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.482083Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_1/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.491717Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_8/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.590684Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_15/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.636093Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_13/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.647742Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_14/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.655780Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_10/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.660228Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_7/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.665096Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_5/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.670338Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_3/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.674919Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_17/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.683602Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_16/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.691495Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_12/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.695843Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_4/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.699960Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_6/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.703878Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_18/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.708032Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_9/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.713041Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_11/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.716867Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_2/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.721067Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_0/file_1.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.726119Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_19/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.731453Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_1/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.736738Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_15/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:51.743006Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_8/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:52.066321Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_13/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:52.302410Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_18/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:52.411683Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_15/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:52.416756Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_2/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:52.421921Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_0/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:52.568555Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_16/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:52.703884Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_5/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:52.963431Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_16/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.102395Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_9/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.215545Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_19/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.220141Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_18/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.254321Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_6/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.336019Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_14/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.470919Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_11/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.476845Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_17/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.520448Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_7/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.634294Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_3/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.657330Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_16/file_0.bin -> /worker_16/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:53.657374Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:53.663108Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_2/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.697065Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_10/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.790547Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_12/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.799994Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_0/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.920876Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_4/file_2.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.939162Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_7/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:53.999621Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_7/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.004687Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_13/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.017830Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_8/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.024181Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_1/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.080326Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_9/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.238820Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_13/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.295801Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_2/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.462440Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_18/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.484952Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_11/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.490877Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_5/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.691395Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_15/file_0.bin -> /worker_15/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:54.691411Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:54.713563Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_8/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.718951Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_0/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.726861Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_17/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.736418Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_6/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.818469Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_10/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:54.852991Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_5/file_0.bin -> /worker_5/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:54.853005Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:54.871504Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_2/file_0.bin -> /worker_2/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:54.871520Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:54.939483Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_7/file_0.bin -> /worker_7/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:54.939515Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:55.044213Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_3/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:55.091706Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_14/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:55.143062Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_13/file_0.bin -> /worker_13/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:55.143078Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:55.193771Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_19/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:55.250847Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_0/file_0.bin -> /worker_0/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:55.250866Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:55.260994Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_8/file_0.bin -> /worker_8/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:55.261014Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:55.273828Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_1/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:55.278611Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_14/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:55.397482Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_9/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:55.538471Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_4/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:55.548500Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_12/file_3.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:55.707022Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_9/file_0.bin -> /worker_9/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:55.707038Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:55.857459Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_19/file_0.bin -> /worker_19/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:55.857482Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.098631Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_4/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:56.106858Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_6/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:56.143289Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_10/file_0.bin -> /worker_10/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.143311Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.148627Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_3/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:56.154329Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_17/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:56.160087Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_12/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:56.179440Z[0m [31mERROR[0m [2mremote_fs_server::handlers[0m[2m:[0m Failed to get metadata for "/tmp/filer-test-base/worker_11/file_4.bin": No such file or directory (os error 2)
+[2m2026-06-06T15:58:56.367085Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_14/file_0.bin -> /worker_14/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.367109Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.384971Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_18/file_0.bin -> /worker_18/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.384990Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.386595Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_4/file_0.bin -> /worker_4/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.386603Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.393862Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_1/file_0.bin -> /worker_1/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.393878Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.396211Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_12/file_0.bin -> /worker_12/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.396223Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.402426Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_17/file_0.bin -> /worker_17/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.402442Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.402509Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_3/file_0.bin -> /worker_3/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.402513Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.405327Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_6/file_0.bin -> /worker_6/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.405338Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.405627Z[0m [31mERROR[0m [2mmounty::fs::remote_fs::dir_ops[0m[2m:[0m rename failed for /worker_11/file_0.bin -> /worker_11/file_0.bin_renamed: other: rename failed: 405 Method Not Allowed - 
+[2m2026-06-06T15:58:56.405632Z[0m [31mERROR[0m [2mmounty::fs::fuse[0m[2m:[0m rename failed: other: rename failed: 405 Method Not Allowed - 
+[*] Building mounty and filer (release mode)...
+[*] Starting filer server on port 3001...
+[*] Creating mountpoint /tmp/mounty-chaos-mnt and starting mounty...
+[*] Starting chaos test with 20 workers...
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_16/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_16/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_15/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_15/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_5/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_5/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_2/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_2/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_7/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_7/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_13/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_13/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_0/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_0/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_8/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_8/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_9/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_9/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_19/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_19/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_10/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_10/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_14/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_14/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_18/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_18/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_4/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_4/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_1/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_1/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_12/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_12/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_17/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_17/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_3/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_3/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_6/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_6/file_0.bin_renamed'
+[!] Error: [Errno 5] Input/output error: '/tmp/mounty-chaos-mnt/worker_11/file_0.bin' -> '/tmp/mounty-chaos-mnt/worker_11/file_0.bin_renamed'
+[!] Chaos test completed with 20 errors.
+[*] Cleaning up...
+[*] Cleanup complete.

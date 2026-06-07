@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  perf-test:
+    build:
+      context: .
+      dockerfile: test/Dockerfile.perf
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+    devices:
+      - /dev/fuse:/dev/fuse
+    # You can pass arguments to the script by overriding the command
+    # command: ["./test/run_perf_tests.sh", "--bw-limit", "100"]
