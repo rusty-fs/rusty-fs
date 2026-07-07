@@ -13,6 +13,44 @@ to unmount before exiting.
 
 ## Install Binaries
 
+The easiest path is the interactive installer:
+
+```bash
+./deploy/install.sh
+```
+
+Preview the full installation without touching system files:
+
+```bash
+./deploy/install.sh --dry-run
+```
+
+Use `--manager systemd` or `--manager launchd` to force the target manager, and
+`--no-start` to install files without starting the services.
+
+Re-running the installer with different values updates the generated service
+files. Unless `--no-start` is used, the affected services are restarted so the
+new flags and environment variables take effect.
+
+Uninstall the installed services with:
+
+```bash
+./deploy/uninstall.sh
+```
+
+Preview uninstall actions without touching system files:
+
+```bash
+./deploy/uninstall.sh --dry-run
+```
+
+The uninstaller stops/disables services and removes service manager files. It
+does not remove `filer` data directories. Removing binaries, mountpoints, and
+logs requires explicit confirmation or the `--remove-binaries`, `--remove-mount`,
+and `--remove-logs` flags.
+
+Manual installation is also possible.
+
 Build release binaries:
 
 ```bash

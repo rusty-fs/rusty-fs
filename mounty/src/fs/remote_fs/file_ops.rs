@@ -2,7 +2,7 @@ use crate::fs::http::FileEntry;
 use crate::fs::http::HttpError;
 use crate::fs::utils::path;
 use crate::fs::utils::runtime;
-use libc::{O_APPEND, O_EXCL, O_TRUNC, O_WRONLY};
+use libc::{mode_t, O_APPEND, O_EXCL, O_TRUNC, O_WRONLY};
 use std::ffi::OsStr;
 use std::time::Duration;
 use tracing::{debug, error, trace};
@@ -198,13 +198,13 @@ impl RemoteFileSystem {
 
         // create a placeholder inode and attr
         let ino = self.get_inode_for_path(&full_path);
-        let perm_bits = (mode & !umask) as u16;
+        let perm_bits = (mode & !umask) as mode_t;
 
         let entry = FileEntry {
             name: name_str.to_string(),
             is_dir: false,
             size: 0,
-            permissions: Some(perm_bits as u32),
+            permissions: Some(perm_bits),
             modified: Some(1_000_000_000), // Safe default timestamp ~2001-09-09
         };
 
