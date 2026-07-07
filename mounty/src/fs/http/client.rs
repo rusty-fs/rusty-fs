@@ -66,6 +66,7 @@ pub trait HttpBackend: Send + Sync {
         total_size: Option<u64>,
     ) -> Result<(), HttpError>;
     async fn rename(&self, path: &str, dst: &str) -> Result<(), HttpError>;
+    async fn update_meta(&self, path: &str, body: serde_json::Value) -> Result<(), HttpError>;
 }
 
 #[derive(Clone)]
@@ -243,27 +244,24 @@ impl HttpBackend for HttpClient {
     }
 
     async fn rename(&self, path: &str, dst: &str) -> Result<(), HttpError> {
-        let url = format!("{}/files{}", self.base_url, path);
-        // Send `new_name` to match server handler (same-directory rename)
-        let body = serde_json::json!({ "new_name": dst }).to_string();
-        debug!("rename URL: {} dst={}", url, dst);
+        let body = serde_json::json!({ "new_name": dst });
+        self.update_meta(path, body).await
+    }
+
+    async fn update_meta(&self, path: &str, body: serde_json::Value) -> Result<(), HttpError> {
+        let url = format!("{}/meta{}", self.base_url, path);
+        debug!("update_meta URL: {}", url);
         let resp = self
             .client
             .patch(&url)
             .header("content-type", "application/json")
-            .body(body)
+            .body(body.to_string())
             .send()
             .await?;
         let status = resp.status();
-        if let Some(len) = resp.content_length() {
-            debug!("rename response: {} content-length={}", status, len);
-        } else {
-            debug!("rename response: {} (no content-length)", status);
-        }
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
             return Err(HttpError::Other(
-                format!("rename failed: {} - {}", status, text).into(),
+                format!("update_meta failed: {}", status).into(),
             ));
         }
         Ok(())
