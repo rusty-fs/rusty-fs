@@ -4,7 +4,7 @@ set -e
 # Configuration
 MOUNT_DIR="/tmp/mounty-test-mnt"
 TEST_FILE_SIZE_MB=1024
-EXPECTED_THRESHOLD_PERCENT=50
+EXPECTED_THRESHOLD_PERCENT="${EXPECTED_THRESHOLD_PERCENT:-75}"
 FILER_PORT=3000
 SERVER_URL="http://localhost:${FILER_PORT}"
 
@@ -241,6 +241,9 @@ if (( $(echo "$BASELINE_MBITS > 0" | bc -l) )); then
         echo "Actual speed ($ACTUAL_MBPS Mbit/s) is below threshold ($THRESHOLD Mbit/s)."
         echo "Baseline: $BASELINE_MBITS Mbit/s"
         echo "======================================================"
+        if [ -n "$GITHUB_ACTIONS" ]; then
+            echo "::warning title=Mounty throughput below baseline::Actual speed ${ACTUAL_MBPS} Mbit/s is below ${EXPECTED_THRESHOLD_PERCENT}% of iperf baseline (${BASELINE_MBITS} Mbit/s)."
+        fi
     else
         echo "[*] Performance meets expectations (>= ${EXPECTED_THRESHOLD_PERCENT}% of baseline)."
     fi

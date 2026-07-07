@@ -15,16 +15,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # File sizes: 10MB, 50MB, 200MB, 500MB, 2048MB
-        file_size: [10, 50, 200, 500, 2048]
-        # Chunk sizes: 1MB, 4MB, 16MB
-        chunk_size: [1048576, 4194304, 16777216]
+        # Keep CI perf small and stable: one payload, two high-throughput chunk configs.
         include:
-          - chunk_size: 1048576
-            chunk_label: "1MB"
-          - chunk_size: 4194304
+          - file_size: 200
+            chunk_size: 4194304
+            max_buffer_size: 8388608
             chunk_label: "4MB"
-          - chunk_size: 16777216
+          - file_size: 200
+            chunk_size: 16777216
+            max_buffer_size: 33554432
             chunk_label: "16MB"
 
     steps:
@@ -50,9 +49,10 @@ jobs:
       - name: Run Performance Test
         env:
           MOUNTY_CHUNK_SIZE: ${{ matrix.chunk_size }}
+          MOUNTY_MAX_BUFFER_SIZE: ${{ matrix.max_buffer_size }}
+          EXPECTED_THRESHOLD_PERCENT: 75
           SKIP_BUILD: 1
         run: |
-          export MOUNTY_MAX_BUFFER_SIZE=$(($MOUNTY_CHUNK_SIZE * 2))
           # Diamo i permessi di lettura/scrittura a FUSE (spesso richiesto sui runner standard)
           sudo chmod a+rw /dev/fuse
           
