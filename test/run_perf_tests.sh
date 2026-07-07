@@ -121,9 +121,13 @@ if [ -n "$BW_LIMIT" ] || [ -n "$PACKET_LOSS" ]; then
 fi
 
 # Build binaries
-echo "[*] Building mounty and filer (release mode)..."
-cargo build --release --manifest-path ./filer/Cargo.toml
-cargo build --release --manifest-path ./mounty/Cargo.toml
+if [ -z "$SKIP_BUILD" ]; then
+    echo "[*] Building mounty and filer (release mode)..."
+    cargo build --release --manifest-path ./filer/Cargo.toml
+    cargo build --release --manifest-path ./mounty/Cargo.toml
+else
+    echo "[*] Skipping build step (SKIP_BUILD is set)..."
+fi
 
 # Start filer
 echo "[*] Starting filer server on port $FILER_PORT..."

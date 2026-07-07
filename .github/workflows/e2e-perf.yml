@@ -1,0 +1,58 @@
+name: E2E Performance Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  fuse-perf-matrix:
+    name: Payload ${{ matrix.file_size }}MB | Chunk ${{ matrix.chunk_label }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # File sizes: 10MB, 50MB, 200MB, 500MB, 2048MB
+        file_size: [10, 50, 200, 500, 2048]
+        # Chunk sizes: 1MB, 4MB, 16MB
+        chunk_size: [1048576, 4194304, 16777216]
+        include:
+          - chunk_size: 1048576
+            chunk_label: "1MB"
+          - chunk_size: 4194304
+            chunk_label: "4MB"
+          - chunk_size: 16777216
+            chunk_label: "16MB"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install OS Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fuse iperf3 iproute2 bc
+
+      - name: Build Filer and Mounty (Release)
+        run: |
+          cargo build --release --manifest-path filer/Cargo.toml
+          cargo build --release --manifest-path mounty/Cargo.toml
+
+      - name: Run Performance Test
+        env:
+          MOUNTY_CHUNK_SIZE: ${{ matrix.chunk_size }}
+          MOUNTY_MAX_BUFFER_SIZE: ${{ matrix.chunk_size * 2 }}
+          SKIP_BUILD: 1
+        run: |
+          # Diamo i permessi di lettura/scrittura a FUSE (spesso richiesto sui runner standard)
+          sudo chmod a+rw /dev/fuse
+          
+          # Eseguiamo il test
+          ./test/run_perf_tests.sh --bw-limit 100 --size-mb ${{ matrix.file_size }} --packet-loss 5
