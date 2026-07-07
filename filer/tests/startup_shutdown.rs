@@ -1,8 +1,8 @@
-use std::process::Command;
-use tempfile::tempdir;
-use std::time::Duration;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
+use std::process::Command;
+use std::time::Duration;
+use tempfile::tempdir;
 
 #[test]
 fn test_startup_without_base_dir_fails() {
