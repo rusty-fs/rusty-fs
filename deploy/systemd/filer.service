@@ -1,0 +1,17 @@
+[Unit]
+Description=Rusty FS filer HTTP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=BASE_DIR=/var/lib/rusty-fs/data
+Environment=RUST_LOG=info
+ExecStart=/usr/local/bin/remote-fs-server --port 3000
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

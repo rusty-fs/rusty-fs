@@ -15,7 +15,9 @@ file system hosted on a remote server. The file system should support transparen
 - Write modified files back to the remote server
 - Support creation, deletion, and renaming of files and directories
 - Maintain file attributes such as size, timestamps, and permissions (as feasible)
-- Run as a background daemon process that handles filesystem operations continuously
+- Run as a long-running service process that handles filesystem operations
+  continuously and can be managed by platform service managers such as systemd
+  on Linux and launchd on macOS
   
 ### 3.2 Server Interface and implementation
 

@@ -21,9 +21,14 @@ cargo run <server_url> <mountpoint>
 # Mount remote filesystem from server to local directory
 cargo run http://localhost:3000 /mnt/remote
 
-# Unmount (from another terminal)
-fusermount -u /mnt/remote
+# Stop normally from another terminal.
+# mounty handles SIGINT/SIGTERM and unmounts the FUSE session.
+kill -TERM <mounty-pid>
 ```
+
+For background operation, run `mounty` as a foreground process managed by the
+platform service manager. See `docs/service_manager_setup.md` for systemd and
+launchd templates.
 
 ## Dependencies
 

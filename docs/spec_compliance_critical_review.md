@@ -62,7 +62,7 @@ The main gaps are:
 | Write files to remote server | Yes | Buffered writes and `PUT` are fully implemented and verified via chunked streaming tests. |
 | Create, delete, and rename files/directories | Yes | Implemented fully. Rename uses server-side endpoint. `rmdir` correctly returns `ENOTEMPTY` for non-empty directories. |
 | Maintain file attributes | Yes | Size, permissions, and modified time are correctly surfaced and persistently saved via `PATCH /meta`. |
-| Operate as a background daemon | Weak | The process runs foreground/blocking. There is no explicit daemonization or service behavior. |
+| Operate as a long-running service process | Mostly | `mounty` runs foreground/blocking by design and is now supported through service-manager templates for systemd and launchd. There is no in-process double-fork daemonization, and service-manager E2E validation is still manual. |
 | Use the specified REST endpoints | Mostly Compliant | The code uses `GET /meta/<path>` and `PATCH /files/<path>` which are required for full POSIX semantics (rename, attr persistence). |
 | Optional caching | Yes | Negative lookup cache, listing cache, metadata cache, read-ahead, and write buffering exist. |
 | Large file support, 100MB+ streaming read/write | Yes | FUSE naturally streams data via chunks. Automated tests execute end-to-end 100MB+ tests and pass successfully. |

@@ -1,0 +1,19 @@
+[Unit]
+Description=Rusty FS mounty FUSE client
+After=network-online.target filer.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=RUST_LOG=info
+Environment=MOUNTY_CHUNK_SIZE=4194304
+Environment=MOUNTY_MAX_BUFFER_SIZE=8388608
+ExecStart=/usr/local/bin/mounty http://127.0.0.1:3000 /mnt/rusty-fs
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+ExecStopPost=-/bin/fusermount3 -u /mnt/rusty-fs
+
+[Install]
+WantedBy=multi-user.target
