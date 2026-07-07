@@ -1,7 +1,10 @@
 // FUSE trait implementation for RemoteFileSystem
 
 use crate::fs::remote_fs::RemoteFileSystem;
-use fuser::{Filesystem, ReplyAttr, ReplyDirectory, ReplyEntry, ReplyEmpty, ReplyXattr, Request, KernelConfig};
+use fuser::{
+    Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyXattr,
+    Request,
+};
 use libc::ENOENT;
 use std::ffi::OsStr;
 use std::time::SystemTime;
@@ -24,6 +27,18 @@ impl Filesystem for RemoteFileSystem {
             desired_write, desired_readahead, negotiated_write, negotiated_readahead
         );
         Ok(())
+    }
+
+    fn destroy(&mut self) {
+        info!("FUSE destroy: starting shutdown drain");
+        match self.shutdown_flush_all() {
+            Ok(()) => info!("FUSE destroy: shutdown drain complete"),
+            Err(failures) => {
+                for (fh, err) in failures {
+                    error!("FUSE destroy: failed to drain fh {}: {}", fh, err);
+                }
+            }
+        }
     }
 
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
@@ -193,7 +208,10 @@ impl Filesystem for RemoteFileSystem {
         _flags: u32,
         reply: fuser::ReplyEmpty,
     ) {
-        debug!("rename called: parent={}, name={:?}, newparent={}, newname={:?}", parent, name, newparent, newname);
+        debug!(
+            "rename called: parent={}, name={:?}, newparent={}, newname={:?}",
+            parent, name, newparent, newname
+        );
 
         match self.rename(parent, name, newparent, newname) {
             Ok(_) => reply.ok(),
@@ -281,10 +299,18 @@ impl Filesystem for RemoteFileSystem {
         debug!("setattr called for ino {} with size {:?}", ino, size);
         match self.setattr(ino, _mode, _uid, _gid, size) {
             Ok(mut attr) => {
-                if let Some(m) = _mode { attr.perm = m as u16; }
-                if let Some(u) = _uid { attr.uid = u; }
-                if let Some(g) = _gid { attr.gid = g; }
-                if let Some(f) = _flags { attr.flags = f; }
+                if let Some(m) = _mode {
+                    attr.perm = m as u16;
+                }
+                if let Some(u) = _uid {
+                    attr.uid = u;
+                }
+                if let Some(g) = _gid {
+                    attr.gid = g;
+                }
+                if let Some(f) = _flags {
+                    attr.flags = f;
+                }
 
                 if let Some(t) = _atime {
                     attr.atime = match t {
@@ -298,8 +324,12 @@ impl Filesystem for RemoteFileSystem {
                         fuser::TimeOrNow::Now => std::time::SystemTime::now(),
                     };
                 }
-                if let Some(t) = _ctime { attr.ctime = t; }
-                if let Some(t) = _crtime { attr.crtime = t; }
+                if let Some(t) = _ctime {
+                    attr.ctime = t;
+                }
+                if let Some(t) = _crtime {
+                    attr.crtime = t;
+                }
 
                 reply.attr(&self.config.ttl, &attr);
             }
@@ -342,7 +372,6 @@ impl Filesystem for RemoteFileSystem {
         reply.ok();
     }
 
-
     fn fallocate(
         &mut self,
         _req: &Request<'_>,
@@ -368,43 +397,8 @@ impl Filesystem for RemoteFileSystem {
     ) {
         trace!("release called for fh {}", fh);
 
-        // Fase 1: Deallocate read buffer
-        if let Some(state) = self.fh_manager.get_fh_state(fh) {
-            *state.read_buf.borrow_mut() = None;
-            *state.read_buf_len.borrow_mut() = 0;
-        }
-
-        // Fase 2: Flush residual write buffer and finalize
-        if let Some(path) = self.get_path_for_inode(ino) {
-            // Flush any remaining buffered data
-            if let Err(e) = self.flush_write_buffer(fh, &path) {
-                error!("release: write buffer flush failed for fh {}: {}", fh, e);
-            }
-
-            // Send finalization PUT with total file size
-            if let Some(state) = self.fh_manager.get_fh_state(fh) {
-                if state.dirty {
-                    if let Some(final_size) = state.file_size {
-                        let client = self.http_client.clone();
-                        let path_clone = path.clone();
-                        if let Err(e) = crate::fs::utils::runtime().block_on(async move {
-                            client
-                                .put_file_stream(&path_clone, reqwest::Body::from(Vec::<u8>::new()), Some(0), Some(final_size))
-                                .await
-                        }) {
-                            error!("release: finalization PUT failed for fh {}: {}", fh, e);
-                        } else {
-                            trace!("release: finalized fh {} with size {}", fh, final_size);
-                        }
-                    }
-                }
-
-                // Check for any pending write errors
-                let errors = state.pending_write_errors.borrow();
-                if !errors.is_empty() {
-                    error!("release: {} pending write errors for fh {}: {:?}", errors.len(), fh, errors);
-                }
-            }
+        if let Err(e) = self.flush_and_finalize_handle(ino, fh) {
+            error!("release: flush/finalize failed for fh {}: {}", fh, e);
         }
 
         self.fh_manager.release_fh(fh);

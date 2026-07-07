@@ -1,0 +1,60 @@
+name: E2E Performance Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    types: [labeled, synchronize]
+    branches: [ "**" ]
+
+jobs:
+  fuse-perf-matrix:
+    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-e2e')
+    name: E2E Perf Matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep CI perf small and stable: one payload, two high-throughput chunk configs.
+        include:
+          - file_size: 200
+            chunk_size: 4194304
+            max_buffer_size: 8388608
+            chunk_label: "4MB"
+          - file_size: 200
+            chunk_size: 16777216
+            max_buffer_size: 33554432
+            chunk_label: "16MB"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install OS Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fuse3 iperf3 iproute2 bc pkg-config libfuse3-dev
+
+      - name: Build Filer and Mounty (Release)
+        run: |
+          cargo build --release --manifest-path filer/Cargo.toml
+          cargo build --release --manifest-path mounty/Cargo.toml
+
+      - name: Run Performance Test
+        env:
+          MOUNTY_CHUNK_SIZE: ${{ matrix.chunk_size }}
+          MOUNTY_MAX_BUFFER_SIZE: ${{ matrix.max_buffer_size }}
+          EXPECTED_THRESHOLD_PERCENT: 75
+          SKIP_BUILD: 1
+        run: |
+          # Diamo i permessi di lettura/scrittura a FUSE (spesso richiesto sui runner standard)
+          sudo chmod a+rw /dev/fuse
+          
+          # Eseguiamo il test
+          ./test/run_perf_tests.sh --bw-limit 100 --size-mb ${{ matrix.file_size }} --packet-loss 5

@@ -101,21 +101,55 @@ mod tests {
         assert!(fs.open(ino, libc::O_RDONLY).is_ok());
         // open non-existing file
         let fake_ino = fs.get_inode_for_path("/nonexistent.txt");
-        assert!(matches!(fs.open(fake_ino, libc::O_RDONLY), Err(HttpError::NotFound)));
+        assert!(matches!(
+            fs.open(fake_ino, libc::O_RDONLY),
+            Err(HttpError::NotFound)
+        ));
         // read existing file
-        let data = fs.read_bytes(ino, None, 0, 10).expect("read should succeed");
+        let data = fs
+            .read_bytes(ino, None, 0, 10)
+            .expect("read should succeed");
         assert_eq!(data, b"0123456789".to_vec());
         // read with offset and length
         let part = fs.read_bytes(ino, None, 2, 5).expect("read should succeed");
         assert_eq!(part, b"23456".to_vec());
         // read beyond EOF
-        let beyond = fs.read_bytes(ino, None, 15, 5).expect("read should succeed");
+        let beyond = fs
+            .read_bytes(ino, None, 15, 5)
+            .expect("read should succeed");
         assert_eq!(beyond.len(), 0);
         // read non-existing file
         assert!(matches!(
             fs.read_bytes(fake_ino, None, 0, 10),
             Err(HttpError::NotFound)
         ));
+    }
+
+    #[test]
+    fn test_shutdown_rejects_new_open() {
+        let backend = Arc::new(FakeBackend::new());
+        let mut fs = RemoteFileSystem::new(backend);
+        let ino = fs.get_inode_for_path("/f.txt");
+
+        fs.begin_shutdown();
+
+        assert!(matches!(
+            fs.open(ino, libc::O_RDONLY),
+            Err(HttpError::ShuttingDown)
+        ));
+    }
+
+    #[test]
+    fn test_shutdown_flush_all_releases_clean_handles() {
+        let backend = Arc::new(FakeBackend::new());
+        let mut fs = RemoteFileSystem::new(backend);
+        let ino = fs.get_inode_for_path("/f.txt");
+        let fh = fs.open(ino, libc::O_RDONLY).expect("open should succeed");
+
+        assert!(fs.fh_manager.get_fh_state_ref(fh).is_some());
+        assert!(fs.shutdown_flush_all().is_ok());
+        assert!(fs.is_shutting_down());
+        assert!(fs.fh_manager.get_fh_state_ref(fh).is_none());
     }
 
     #[test]

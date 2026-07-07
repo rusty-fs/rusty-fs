@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-use std::cell::RefCell;
-use tokio::sync::mpsc;
 use bytes::Bytes;
 use reqwest::Error as ReqwestError;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use tokio::sync::mpsc;
 
 /// Represents the state of an open file handle
 #[derive(Debug)]
@@ -48,7 +48,7 @@ impl FhManager {
         Self {
             next_fh: 1,
             fh_map: HashMap::new(),
-            read_buf_cap: 4 * 1024 * 1024, // 4 MB default
+            read_buf_cap: 4 * 1024 * 1024,  // 4 MB default
             write_buf_cap: 1 * 1024 * 1024, // 1 MB default
         }
     }
@@ -101,15 +101,25 @@ impl FhManager {
 
     /// Get all file handles for a given inode
     pub fn get_fhs_for_inode(&self, ino: u64) -> Vec<u64> {
-        self.fh_map.iter()
+        self.fh_map
+            .iter()
             .filter(|(_, state)| state.ino == ino)
             .map(|(&fh, _)| fh)
             .collect()
     }
 
+    /// Snapshot all currently open file handles as `(fh, ino)` pairs.
+    pub fn open_handles(&self) -> Vec<(u64, u64)> {
+        self.fh_map
+            .iter()
+            .map(|(&fh, state)| (fh, state.ino))
+            .collect()
+    }
+
     /// Get the latest file size across all handles for an inode
     pub fn get_file_size_by_inode(&self, ino: u64) -> Option<u64> {
-        self.fh_map.values()
+        self.fh_map
+            .values()
             .filter(|state| state.ino == ino)
             .filter_map(|state| state.file_size)
             .max()
@@ -168,6 +178,18 @@ mod tests {
         assert!(manager.get_fh_state(fh).is_none());
     }
 
+    #[test]
+    fn test_open_handles_snapshots_fh_and_inode() {
+        let mut manager = FhManager::new();
+        let fh1 = manager.alloc_fh(10, 0);
+        let fh2 = manager.alloc_fh(20, 0);
+
+        let mut handles = manager.open_handles();
+        handles.sort_unstable();
+
+        assert_eq!(handles, vec![(fh1, 10), (fh2, 20)]);
+    }
+
     proptest! {
         #[test]
         fn prop_alloc_and_release(ino in any::<u64>(), flags in any::<i32>()) {
@@ -193,7 +215,7 @@ mod tests {
                 assert!(retrieved_fhs.contains(&fh));
             }
         }
-        
+
         #[test]
         fn prop_file_size_tracking(ino in any::<u64>(), sizes in proptest::collection::vec(any::<u64>(), 1..10)) {
             let mut manager = FhManager::new();

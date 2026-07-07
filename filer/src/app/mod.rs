@@ -2,7 +2,7 @@ use crate::handlers::{delete_path, list, meta, mkdir, put_file, read, rename};
 use axum::extract::DefaultBodyLimit;
 use axum::{
     Extension, Router,
-    routing::{delete, get, post, put, patch},
+    routing::{delete, get, patch, post, put},
 };
 use std::sync::Arc;
 use tower_http::trace::{self, TraceLayer};
