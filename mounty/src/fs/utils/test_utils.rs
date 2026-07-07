@@ -217,6 +217,10 @@ impl HttpBackend for FakeBackend {
     async fn rename(&self, _path: &str, _dst: &str) -> Result<(), HttpError> {
         Ok(())
     }
+
+    async fn update_meta(&self, _path: &str, _body: serde_json::Value) -> Result<(), HttpError> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
