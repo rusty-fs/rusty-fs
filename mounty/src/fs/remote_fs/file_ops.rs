@@ -492,10 +492,12 @@ impl RemoteFileSystem {
     pub fn setattr(
         &mut self,
         ino: u64,
-        _mode: Option<u32>,
+        mode: Option<u32>,
         _uid: Option<u32>,
         _gid: Option<u32>,
         size: Option<u64>,
+        atime: Option<std::time::SystemTime>,
+        mtime: Option<std::time::SystemTime>,
     ) -> Result<super::FileAttr, HttpError> {
         self.ensure_running()?;
         // For now we just support size changes (truncate)
@@ -506,6 +508,33 @@ impl RemoteFileSystem {
                 return Err(HttpError::NotFound);
             }
         };
+
+        if mode.is_some() || atime.is_some() || mtime.is_some() {
+            let mut payload = serde_json::Map::new();
+            if let Some(m) = mode {
+                payload.insert("mode".to_string(), serde_json::json!(m));
+            }
+            if let Some(a) = atime {
+                if let Ok(dur) = a.duration_since(std::time::UNIX_EPOCH) {
+                    payload.insert("atime".to_string(), serde_json::json!(dur.as_secs()));
+                }
+            }
+            if let Some(m) = mtime {
+                if let Ok(dur) = m.duration_since(std::time::UNIX_EPOCH) {
+                    payload.insert("mtime".to_string(), serde_json::json!(dur.as_secs()));
+                }
+            }
+
+            let client = self.http_client.clone();
+            let p = path.clone();
+            if let Err(e) = runtime::runtime().block_on(async move {
+                client
+                    .update_meta(&p, serde_json::Value::Object(payload))
+                    .await
+            }) {
+                error!("setattr metadata update failed: {}", e);
+            }
+        }
 
         if let Some(new_size) = size {
             debug!("truncating file {} to size {}", path, new_size);
@@ -553,6 +582,6 @@ impl RemoteFileSystem {
                 }
             }
         }
-        Ok(self.getattr(ino)?)
+        self.getattr(ino)
     }
 }

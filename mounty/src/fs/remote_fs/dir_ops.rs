@@ -127,7 +127,7 @@ impl RemoteFileSystem {
                     // fallback: try directory
                     if let Ok(_) = client.list_directory(&path_clone).await {
                         Ok(FileEntry {
-                            name: path_clone.split('/').last().unwrap_or("").to_string(),
+                            name: path_clone.split('/').next_back().unwrap_or("").to_string(),
                             is_dir: true,
                             size: 0,
                             modified: Some(1_000_000_000),
@@ -270,13 +270,13 @@ impl RemoteFileSystem {
                     Ok(attr) => Ok((inode, attr)),
                     Err(e) => {
                         error!("mkdir succeeded but getattr failed: {}", e);
-                        return Err(e);
+                        Err(e)
                     }
                 }
             }
             Err(e) => {
                 error!("mkdir failed: {}", e);
-                return Err(e);
+                Err(e)
             }
         }
     }

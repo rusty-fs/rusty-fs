@@ -75,7 +75,7 @@ mod tests {
         assert_eq!(attrd.kind, FileType::Directory);
         assert_eq!(attrd.perm, 0o755);
         // blocks calculation: (size + 511) / 512
-        assert_eq!(attr.blocks, (1234 + 511) / 512);
+        assert_eq!(attr.blocks, 1234_u64.div_ceil(512));
     }
 
     #[test]

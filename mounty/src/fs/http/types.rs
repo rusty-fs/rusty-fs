@@ -1,5 +1,5 @@
+use libc::mode_t;
 use serde::{Deserialize, Serialize};
-use std::os::unix::raw::mode_t;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntry {

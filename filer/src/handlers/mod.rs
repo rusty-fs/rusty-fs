@@ -22,22 +22,25 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, trace};
 
+fn safe_join_path(base_dir: &str, requested: &str) -> Result<PathBuf, StatusCode> {
+    let mut full_path = PathBuf::from(base_dir.trim_end_matches('/'));
+    for component in std::path::Path::new(requested).components() {
+        match component {
+            std::path::Component::Normal(c) => full_path.push(c),
+            std::path::Component::ParentDir => return Err(StatusCode::BAD_REQUEST),
+            _ => {} // Ignore RootDir, CurDir, Prefix to prevent absolute path escapes
+        }
+    }
+    Ok(full_path)
+}
 pub async fn list(
     requested_path: Option<Path<String>>,
     Extension(base_dir): Extension<Arc<String>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let requested_path = requested_path.map(|p| p.0).unwrap_or_default();
 
-    if requested_path.contains("..") {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
-    let requested = requested_path.trim_start_matches('/').to_string();
-    let full_path = if requested.is_empty() {
-        PathBuf::from(base_dir.trim_end_matches('/'))
-    } else {
-        PathBuf::from(base_dir.trim_end_matches('/')).join(&requested)
-    };
+    let full_path = safe_join_path(&base_dir, &requested_path)?;
+    let _requested = requested_path.trim_start_matches('/').to_string();
 
     let entries = fs::read_dir(&full_path)
         .map_err(|e| {
@@ -95,16 +98,8 @@ pub async fn meta(
     Extension(base_dir): Extension<Arc<String>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let requested_raw = file_path.0;
-    if requested_raw.contains("..") {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
+    let full_path = safe_join_path(&base_dir, &requested_raw)?;
     let requested = requested_raw.trim_start_matches('/').to_string();
-    let full_path = if requested.is_empty() {
-        PathBuf::from(base_dir.trim_end_matches('/'))
-    } else {
-        PathBuf::from(base_dir.trim_end_matches('/')).join(&requested)
-    };
 
     info!("Getting metadata for: {} -> {:?}", requested, full_path);
 
@@ -261,16 +256,8 @@ pub async fn read(
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
     let requested_raw = file_path.0;
-    if requested_raw.contains("..") {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
+    let full_path = safe_join_path(&base_dir, &requested_raw)?;
     let requested = requested_raw.trim_start_matches('/').to_string();
-    let full_path = if requested.is_empty() {
-        PathBuf::from(base_dir.trim_end_matches('/'))
-    } else {
-        PathBuf::from(base_dir.trim_end_matches('/')).join(&requested)
-    };
 
     debug!("Reading file: {} -> {:?}", requested, full_path);
 
@@ -283,16 +270,8 @@ pub async fn mkdir(
     Extension(base_dir): Extension<Arc<String>>,
 ) -> Result<StatusCode, StatusCode> {
     let requested_raw = file_path.0;
-    if requested_raw.contains("..") {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
+    let full_path = safe_join_path(&base_dir, &requested_raw)?;
     let requested = requested_raw.trim_start_matches('/').to_string();
-    let full_path = if requested.is_empty() {
-        PathBuf::from(base_dir.trim_end_matches('/'))
-    } else {
-        PathBuf::from(base_dir.trim_end_matches('/')).join(&requested)
-    };
 
     info!("Creating directory: {} -> {:?}", requested, full_path);
 
@@ -310,27 +289,23 @@ pub async fn delete_path(
     Extension(base_dir): Extension<Arc<String>>,
 ) -> Result<StatusCode, StatusCode> {
     let requested_raw = file_path.0;
-    if requested_raw.contains("..") {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
+    let full_path = safe_join_path(&base_dir, &requested_raw)?;
     let requested = requested_raw.trim_start_matches('/').to_string();
-    let full_path = if requested.is_empty() {
-        PathBuf::from(base_dir.trim_end_matches('/'))
-    } else {
-        PathBuf::from(base_dir.trim_end_matches('/')).join(&requested)
-    };
 
     info!("Deleting path: {} -> {:?}", requested, full_path);
 
     match fs::metadata(&full_path) {
         Ok(meta) => {
             if meta.is_dir() {
-                match fs::remove_dir_all(&full_path) {
+                match tokio::fs::remove_dir(&full_path).await {
                     Ok(_) => Ok(StatusCode::NO_CONTENT),
                     Err(e) => {
                         error!("Failed to delete directory {:?}: {}", full_path, e);
-                        Err(StatusCode::INTERNAL_SERVER_ERROR)
+                        if e.kind() == std::io::ErrorKind::DirectoryNotEmpty {
+                            Err(StatusCode::UNPROCESSABLE_ENTITY)
+                        } else {
+                            Err(StatusCode::INTERNAL_SERVER_ERROR)
+                        }
                     }
                 }
             } else {
@@ -357,16 +332,11 @@ pub async fn put_file(
     body: Body,
 ) -> Result<StatusCode, StatusCode> {
     let requested_raw = file_path.0;
-    if requested_raw.contains("..") {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
+    let full_path = safe_join_path(&base_dir, &requested_raw)?;
     let requested = requested_raw.trim_start_matches('/').to_string();
     if requested.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-
-    let full_path = PathBuf::from(base_dir.trim_end_matches('/')).join(&requested);
     debug!("Writing file: {} -> {:?}", requested, full_path);
 
     trace!("Headers: {:?}", headers);
@@ -449,6 +419,7 @@ pub async fn put_file(
         let mut f = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
+            .truncate(false)
             .open(&full_path)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -528,52 +499,88 @@ struct FileEntry {
 }
 
 #[derive(serde::Deserialize)]
-pub struct RenameRequest {
-    new_name: String,
+pub struct UpdateMetaRequest {
+    new_name: Option<String>,
+    mode: Option<u32>,
+    mtime: Option<u64>,
+    atime: Option<u64>,
 }
 
-pub async fn rename(
+pub async fn update_meta(
     file_path: Path<String>,
     Extension(base_dir): Extension<Arc<String>>,
-    Json(payload): Json<RenameRequest>,
+    Json(payload): Json<UpdateMetaRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let requested_raw = file_path.0;
-    if requested_raw.contains("..") {
-        return Err(StatusCode::BAD_REQUEST);
-    }
+    let full_path = safe_join_path(&base_dir, &requested_raw)?;
     let requested = requested_raw.trim_start_matches('/').to_string();
     if requested.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-
-    let full_path = PathBuf::from(base_dir.trim_end_matches('/')).join(&requested);
-
-    let dst_raw = payload.new_name;
-    if dst_raw.contains("..") {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let dst_requested = dst_raw.trim_start_matches('/').to_string();
-    if dst_requested.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let full_dst_path = PathBuf::from(base_dir.trim_end_matches('/')).join(&dst_requested);
-
-    debug!("Renaming {} to {}", requested, dst_requested);
-
-    if let Some(parent) = full_dst_path.parent() {
-        let _ = fs::create_dir_all(parent);
+    if !full_path.exists() {
+        return Err(StatusCode::NOT_FOUND);
     }
 
-    match tokio::fs::rename(&full_path, &full_dst_path).await {
-        Ok(_) => Ok(StatusCode::NO_CONTENT),
-        Err(e) => {
-            error!(
-                "Failed to rename {:?} to {:?}: {}",
-                full_path, full_dst_path, e
-            );
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+    // Process mode updates
+    if let Some(mode) = payload.mode {
+        debug!("Setting permissions {:o} for {:?}", mode, full_path);
+        if let Ok(mut perms) = fs::metadata(&full_path).map(|m| m.permissions()) {
+            perms.set_mode(mode);
+            if let Err(e) = fs::set_permissions(&full_path, perms) {
+                error!("Failed to set permissions on {:?}: {}", full_path, e);
+            }
         }
     }
+
+    // Process timestamp updates
+    if payload.atime.is_some() || payload.mtime.is_some() {
+        if let Ok(meta) = fs::metadata(&full_path) {
+            let atime = payload
+                .atime
+                .map(|t| filetime::FileTime::from_unix_time(t as i64, 0))
+                .unwrap_or_else(|| filetime::FileTime::from_last_access_time(&meta));
+            let mtime = payload
+                .mtime
+                .map(|t| filetime::FileTime::from_unix_time(t as i64, 0))
+                .unwrap_or_else(|| filetime::FileTime::from_last_modification_time(&meta));
+
+            debug!(
+                "Setting timestamps (atime: {:?}, mtime: {:?}) for {:?}",
+                atime, mtime, full_path
+            );
+            if let Err(e) = filetime::set_file_times(&full_path, atime, mtime) {
+                error!("Failed to set timestamps on {:?}: {}", full_path, e);
+            }
+        }
+    }
+
+    // Process rename if new_name is provided
+    if let Some(dst_raw) = payload.new_name {
+        let full_dst_path = safe_join_path(&base_dir, &dst_raw)?;
+        let dst_requested = dst_raw.trim_start_matches('/').to_string();
+        if dst_requested.is_empty() {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+
+        debug!("Renaming {} to {}", requested, dst_requested);
+
+        if let Some(parent) = full_dst_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        return match tokio::fs::rename(&full_path, &full_dst_path).await {
+            Ok(_) => Ok(StatusCode::NO_CONTENT),
+            Err(e) => {
+                error!(
+                    "Failed to rename {:?} to {:?}: {}",
+                    full_path, full_dst_path, e
+                );
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        };
+    }
+
+    Ok(StatusCode::OK)
 }
 
 #[cfg(test)]

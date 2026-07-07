@@ -18,6 +18,8 @@ pub enum HttpError {
     ShuttingDown,
     #[error("network error: {0}")]
     Network(String),
+    #[error("directory not empty")]
+    DirectoryNotEmpty,
     #[error("other: {0}")]
     Other(String),
 }
@@ -29,7 +31,18 @@ impl HttpError {
             HttpError::PermissionDenied => EACCES,
             HttpError::AlreadyExists => libc::EEXIST,
             HttpError::ShuttingDown => libc::ESHUTDOWN,
+            HttpError::DirectoryNotEmpty => libc::ENOTEMPTY,
             HttpError::Network(_) | HttpError::Other(_) => EIO,
+        }
+    }
+
+    pub fn from_status(status: StatusCode, text: &str) -> Self {
+        match status {
+            StatusCode::NOT_FOUND => HttpError::NotFound,
+            StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED => HttpError::PermissionDenied,
+            StatusCode::CONFLICT => HttpError::AlreadyExists,
+            StatusCode::UNPROCESSABLE_ENTITY => HttpError::DirectoryNotEmpty,
+            _ => HttpError::Other(format!("HTTP {}: {}", status, text)),
         }
     }
 }
@@ -66,6 +79,7 @@ pub trait HttpBackend: Send + Sync {
         total_size: Option<u64>,
     ) -> Result<(), HttpError>;
     async fn rename(&self, path: &str, dst: &str) -> Result<(), HttpError>;
+    async fn update_meta(&self, path: &str, body: serde_json::Value) -> Result<(), HttpError>;
 }
 
 #[derive(Clone)]
@@ -107,17 +121,16 @@ impl HttpBackend for HttpClient {
 
                 let listing: DirectoryListing =
                     serde_json::from_str(&response_text).map_err(|e| {
-                        HttpError::Other(
-                            format!("JSON parse error: {} - Response: {}", e, response_text).into(),
-                        )
+                        HttpError::Other(format!(
+                            "JSON parse error: {} - Response: {}",
+                            e, response_text
+                        ))
                     })?;
 
                 Ok(listing.files)
             }
             Err(e) => {
-                return Err(HttpError::Other(
-                    format!("Failed to send request: {}", e).into(),
-                ));
+                return Err(HttpError::Other(format!("Failed to send request: {}", e)));
             }
         }
     }
@@ -136,14 +149,13 @@ impl HttpBackend for HttpClient {
         }
         let text = resp.text().await?;
         if !status.is_success() {
-            return Err(HttpError::Other(
-                format!("meta request failed: {} - {}", status, text).into(),
-            ));
+            return Err(HttpError::from_status(status, &text));
         }
         let entry: FileEntry = serde_json::from_str(&text).map_err(|e| {
-            HttpError::Other(
-                format!("JSON parse error for metadata: {} - Response: {}", e, text).into(),
-            )
+            HttpError::Other(format!(
+                "JSON parse error for metadata: {} - Response: {}",
+                e, text
+            ))
         })?;
         Ok(entry)
     }
@@ -175,9 +187,7 @@ impl HttpBackend for HttpClient {
         let status = resp.status();
         if !(status.is_success() || status == StatusCode::PARTIAL_CONTENT) {
             let text = resp.text().await.unwrap_or_default();
-            return Err(HttpError::Other(
-                format!("read_range failed: {} - {}", status, text).into(),
-            ));
+            return Err(HttpError::from_status(status, &text));
         }
         let bytes = resp.bytes().await?;
         Ok(bytes.to_vec())
@@ -189,9 +199,7 @@ impl HttpBackend for HttpClient {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(HttpError::Other(
-                format!("create_directory failed: {} - {}", status, text).into(),
-            ));
+            return Err(HttpError::from_status(status, &text));
         }
         Ok(())
     }
@@ -202,9 +210,7 @@ impl HttpBackend for HttpClient {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(HttpError::Other(
-                format!("delete_path failed: {} - {}", status, text).into(),
-            ));
+            return Err(HttpError::from_status(status, &text));
         }
         Ok(())
     }
@@ -234,37 +240,31 @@ impl HttpBackend for HttpClient {
 
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(HttpError::Other(
-                format!("put_file_stream failed: {} - {}", status, text).into(),
-            ));
+            return Err(HttpError::from_status(status, &text));
         }
 
         Ok(())
     }
 
     async fn rename(&self, path: &str, dst: &str) -> Result<(), HttpError> {
-        let url = format!("{}/files{}", self.base_url, path);
-        // Send `new_name` to match server handler (same-directory rename)
-        let body = serde_json::json!({ "new_name": dst }).to_string();
-        debug!("rename URL: {} dst={}", url, dst);
+        let body = serde_json::json!({ "new_name": dst });
+        self.update_meta(path, body).await
+    }
+
+    async fn update_meta(&self, path: &str, body: serde_json::Value) -> Result<(), HttpError> {
+        let url = format!("{}/meta{}", self.base_url, path);
+        debug!("update_meta URL: {}", url);
         let resp = self
             .client
             .patch(&url)
             .header("content-type", "application/json")
-            .body(body)
+            .body(body.to_string())
             .send()
             .await?;
         let status = resp.status();
-        if let Some(len) = resp.content_length() {
-            debug!("rename response: {} content-length={}", status, len);
-        } else {
-            debug!("rename response: {} (no content-length)", status);
-        }
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(HttpError::Other(
-                format!("rename failed: {} - {}", status, text).into(),
-            ));
+            return Err(HttpError::from_status(status, &text));
         }
         Ok(())
     }
@@ -273,7 +273,7 @@ impl HttpBackend for HttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use httpmock::Method::GET;
+    use httpmock::Method::{DELETE, GET, PATCH, POST, PUT};
     use httpmock::MockServer;
     use serde_json::json;
     use tokio;
@@ -342,5 +342,104 @@ mod tests {
         let client = make_client(&server.base_url());
         let result = client.read_range("/foo.txt", 2, 3).await.unwrap();
         assert_eq!(result, b"cde");
+    }
+    #[test]
+    fn test_error_mapping() {
+        let err = HttpError::from_status(reqwest::StatusCode::NOT_FOUND, "not found text");
+        assert!(matches!(err, HttpError::NotFound));
+        assert_eq!(err.to_errno(), libc::ENOENT);
+
+        let err = HttpError::from_status(reqwest::StatusCode::FORBIDDEN, "forbidden text");
+        assert!(matches!(err, HttpError::PermissionDenied));
+        assert_eq!(err.to_errno(), libc::EACCES);
+
+        let err = HttpError::from_status(reqwest::StatusCode::CONFLICT, "conflict text");
+        assert!(matches!(err, HttpError::AlreadyExists));
+        assert_eq!(err.to_errno(), libc::EEXIST);
+
+        let err = HttpError::from_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR, "error text");
+        assert!(matches!(err, HttpError::Other(_)));
+        assert_eq!(err.to_errno(), libc::EIO);
+    }
+
+    #[tokio::test]
+    async fn test_create_directory_success() {
+        let server = MockServer::start_async().await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/mkdir/new_dir");
+                then.status(200);
+            })
+            .await;
+
+        let client = make_client(&server.base_url());
+        let result = client.create_directory("/new_dir").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete_path_success() {
+        let server = MockServer::start_async().await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(DELETE).path("/files/old_dir");
+                then.status(200);
+            })
+            .await;
+
+        let client = make_client(&server.base_url());
+        let result = client.delete_path("/old_dir").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_update_meta_success() {
+        let server = MockServer::start_async().await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(PATCH).path("/meta/file.txt");
+                then.status(200);
+            })
+            .await;
+
+        let client = make_client(&server.base_url());
+        let body = json!({"permissions": 0o777});
+        let result = client.update_meta("/file.txt", body).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_rename_success() {
+        let server = MockServer::start_async().await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(PATCH).path("/meta/old.txt");
+                then.status(200);
+            })
+            .await;
+
+        let client = make_client(&server.base_url());
+        let result = client.rename("/old.txt", "new.txt").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_put_file_stream_success() {
+        let server = MockServer::start_async().await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/files/file.txt")
+                    .header("Content-Range", "bytes 5-*/10");
+                then.status(200);
+            })
+            .await;
+
+        let client = make_client(&server.base_url());
+        let body = reqwest::Body::from(vec![1, 2, 3]);
+        let result = client
+            .put_file_stream("/file.txt", body, Some(5), Some(10))
+            .await;
+        assert!(result.is_ok());
     }
 }
