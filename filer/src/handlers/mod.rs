@@ -21,7 +21,6 @@ use tokio::fs::File as TokioFile;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, trace};
-use filetime::{set_file_times, FileTime};
 
 pub async fn list(
     requested_path: Option<Path<String>>,
