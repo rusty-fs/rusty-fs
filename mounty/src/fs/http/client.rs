@@ -1,8 +1,8 @@
 use super::types::{DirectoryListing, FileEntry};
 use async_trait::async_trait;
 use libc::{EACCES, EIO, ENOENT};
-use reqwest::header::RANGE;
 use reqwest::StatusCode;
+use reqwest::header::RANGE;
 use thiserror::Error;
 use tracing::{debug, trace};
 
@@ -124,10 +124,7 @@ impl HttpBackend for HttpClient {
         let resp = self.client.get(&url).send().await?;
         let status = resp.status();
         if let Some(len) = resp.content_length() {
-            debug!(
-                "get_file_metadata response: {} content-length={}",
-                status, len
-            );
+            debug!("get_file_metadata response: {} content-length={}", status, len);
         } else {
             debug!("get_file_metadata response: {} (no content-length)", status);
         }
@@ -152,15 +149,12 @@ impl HttpBackend for HttpClient {
         length: usize,
     ) -> Result<Vec<u8>, HttpError> {
         let end = offset.saturating_add(length as u64).saturating_sub(1);
-
+        
         trace!(
             "Sending range request: {}-{} ({} bytes) for file {}",
-            offset,
-            end,
-            length,
-            path
+            offset, end, length, path
         );
-
+        
         let url = format!("{}/files{}", self.base_url, path);
         let range_header = format!("bytes={}-{}", offset, end);
         let resp = self
@@ -241,8 +235,8 @@ impl HttpBackend for HttpClient {
 
     async fn rename(&self, path: &str, dst: &str) -> Result<(), HttpError> {
         let url = format!("{}/files{}", self.base_url, path);
-        // Send `new_name` to match server handler (same-directory rename)
-        let body = serde_json::json!({ "new_name": dst }).to_string();
+    // Send `new_name` to match server handler (same-directory rename)
+    let body = serde_json::json!({ "new_name": dst }).to_string();
         debug!("rename URL: {} dst={}", url, dst);
         let resp = self
             .client

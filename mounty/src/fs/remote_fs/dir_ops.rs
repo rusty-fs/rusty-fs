@@ -4,20 +4,20 @@ use crate::fs::utils::path;
 use crate::fs::utils::runtime;
 use fuser::FileType;
 use std::ffi::OsStr;
-use tracing::{debug, error};
+use tracing::{error, debug};
 
 use super::RemoteFileSystem;
 
 impl RemoteFileSystem {
     /// Lookup a name under a parent inode and return (inode, FileAttr)
     pub fn lookup(&mut self, parent: u64, name: &str) -> Result<(u64, super::FileAttr), HttpError> {
-        // increment total lookup counter
-        // metrics removed: inc_lookup_total() removed
+            // increment total lookup counter
+                // metrics removed: inc_lookup_total() removed
         let parent_path = self.get_path_for_inode(parent).ok_or(HttpError::NotFound)?;
         let full_path = path::join_path(&parent_path, name);
         // Fast path: consult negative lookup cache to suppress repeated ENOENT probes
         if self.negative_lookup_is_cached(&full_path) {
-            debug!("lookup negative-cache hit for {}", full_path);
+                debug!("lookup negative-cache hit for {}", full_path);
             return Err(HttpError::NotFound);
         }
 
@@ -33,10 +33,7 @@ impl RemoteFileSystem {
                 let attr = self.file_entry_to_attr(&entry, inode);
                 return Ok((inode, attr));
             } else {
-                debug!(
-                    "lookup: not found in listing cache for {} — returning NotFound (cached)",
-                    full_path
-                );
+                debug!("lookup: not found in listing cache for {} — returning NotFound (cached)", full_path);
                 // treat as NotFound and cache that result briefly
                 self.negative_lookup_insert(&full_path);
                 return Err(HttpError::NotFound);
@@ -47,7 +44,7 @@ impl RemoteFileSystem {
         let parent_clone = parent_path.clone();
         let name_clone = name.to_string();
         // cache miss; record and perform the network call
-        // cache miss; perform the network call
+            // cache miss; perform the network call
         let list_res = runtime::runtime().block_on(async move {
             match client.list_directory(&parent_clone).await {
                 Ok(entries) => {
@@ -67,9 +64,7 @@ impl RemoteFileSystem {
                 self.negative_lookup_remove(&full_path);
                 // Also insert the full listing into the short-lived cache so subsequent
                 // lookups/readdir can use it without another network call.
-                if let Ok(entries) =
-                    runtime::runtime().block_on(self.http_client.list_directory(&parent_path))
-                {
+                if let Ok(entries) = runtime::runtime().block_on(self.http_client.list_directory(&parent_path)) {
                     self.listing_cache_insert(&parent_path, entries);
                 }
                 let inode = self.get_inode_for_path(&full_path);
@@ -136,7 +131,7 @@ impl RemoteFileSystem {
                     }
                 }
             }
-        })?;
+    })?;
 
         // Insert into metadata cache for future getattr calls
         self.metadata_cache_insert(&path, res.clone());
@@ -154,7 +149,7 @@ impl RemoteFileSystem {
         let client = self.http_client.clone();
         let path_clone = path.clone();
         // record a readdir for metrics
-        // metrics removed: inc_readdir_requests()
+            // metrics removed: inc_readdir_requests()
 
         // Try cache first
         if let Some(cached) = self.listing_cache_get(&path) {
@@ -169,9 +164,9 @@ impl RemoteFileSystem {
         }
 
         // Cache miss: perform network list and record the list request
-        // Cache miss: perform network list
-        let entries =
-            runtime::runtime().block_on(async move { client.list_directory(&path_clone).await })?;
+            // Cache miss: perform network list
+        let entries = runtime::runtime()
+            .block_on(async move { client.list_directory(&path_clone).await })?;
         // insert into cache for a short TTL
         self.listing_cache_insert(&path, entries.clone());
         let mut out = Vec::new();
@@ -320,13 +315,7 @@ impl RemoteFileSystem {
     }
 
     /// Rename or move a file: supports renaming within same directory or moving across directories
-    pub fn rename(
-        &mut self,
-        parent: u64,
-        name: &OsStr,
-        newparent: u64,
-        newname: &OsStr,
-    ) -> Result<(), HttpError> {
+    pub fn rename(&mut self, parent: u64, name: &OsStr, newparent: u64, newname: &OsStr) -> Result<(), HttpError> {
         let name_str = match name.to_str() {
             Some(s) => s,
             None => {
@@ -344,9 +333,7 @@ impl RemoteFileSystem {
 
         let parent_path = self.get_path_for_inode(parent).ok_or(HttpError::NotFound)?;
         let full_path = path::join_path(&parent_path, name_str);
-        let new_parent_path = self
-            .get_path_for_inode(newparent)
-            .ok_or(HttpError::NotFound)?;
+        let new_parent_path = self.get_path_for_inode(newparent).ok_or(HttpError::NotFound)?;
         let new_full_path = path::join_path(&new_parent_path, newname_str);
 
         // Prevent directory traversal from client-supplied names
@@ -361,8 +348,7 @@ impl RemoteFileSystem {
         // Call the HTTP client to perform server-side rename/move
         let call_src = src.clone();
         let call_dst = dst.clone();
-        let res =
-            runtime::runtime().block_on(async move { client.rename(&call_src, &call_dst).await });
+        let res = runtime::runtime().block_on(async move { client.rename(&call_src, &call_dst).await });
 
         match res {
             Ok(_) => {

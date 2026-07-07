@@ -32,13 +32,13 @@ fn main() -> anyhow::Result<()> {
         server_url, mountpoint
     );
 
-    let http_client = Arc::new(HttpClient::new(server_url.to_string()));
+    let http_client =  Arc::new(HttpClient::new(server_url.to_string()));
     // load configuration from env (with sensible defaults)
     let config = fs::config::FuseConfig::from_env();
     debug!("using FuseConfig: {:?}", config);
     let fs = RemoteFileSystem::with_config(http_client.clone(), config.clone());
     // metrics removed: no background metrics reporter
-
+    
     let mut options = vec![
         MountOption::RW, // Read-write
         MountOption::FSName("remote-fs".to_string()),

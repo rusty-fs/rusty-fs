@@ -200,10 +200,10 @@ async fn stream_file(
     }
 
     let (start, end_opt) = range.unwrap();
-
+    
     let max_end = file_size.saturating_sub(1);
     let mut end = end_opt.unwrap_or(max_end);
-
+    
     if end > max_end {
         end = max_end;
     }
@@ -409,7 +409,7 @@ pub async fn put_file(
             .open(&tmp_path)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+        
         let mut f = tokio::io::BufWriter::with_capacity(8 * 1024 * 1024, f); // 8MB buffer
 
         let mut stream = body.into_data_stream();
@@ -424,28 +424,20 @@ pub async fn put_file(
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
         }
-
-        f.flush()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        
+        f.flush().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let f = f.into_inner();
-
+        
         // Only fsync if body is not empty (non-trivial write)
         if !is_empty_body {
-            f.sync_all()
-                .await
+            f.sync_all().await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         drop(f);
 
-        tokio::fs::rename(&tmp_path, &full_path)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        tokio::fs::rename(&tmp_path, &full_path).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     } else {
-        trace!(
-            "Partial write detected at offset {}, total_size {:?}",
-            offset, total_size
-        );
+        trace!("Partial write detected at offset {}, total_size {:?}", offset, total_size);
         let mut f = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
@@ -455,15 +447,12 @@ pub async fn put_file(
 
         // If total_size is known, update file length to match it
         if let Some(ts) = total_size {
-            f.set_len(ts)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            f.set_len(ts).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
 
-        f.seek(SeekFrom::Start(offset))
-            .await
+        f.seek(SeekFrom::Start(offset)).await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+            
         let mut f = tokio::io::BufWriter::with_capacity(8 * 1024 * 1024, f); // 8MB buffer
         let mut stream = body.into_data_stream();
         use futures::StreamExt;
@@ -477,14 +466,9 @@ pub async fn put_file(
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
         }
-
-        f.flush()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        f.into_inner()
-            .sync_all()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        
+        f.flush().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        f.into_inner().sync_all().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
 
     if existed {
@@ -567,10 +551,7 @@ pub async fn rename(
     match tokio::fs::rename(&full_path, &full_dst_path).await {
         Ok(_) => Ok(StatusCode::NO_CONTENT),
         Err(e) => {
-            error!(
-                "Failed to rename {:?} to {:?}: {}",
-                full_path, full_dst_path, e
-            );
+            error!("Failed to rename {:?} to {:?}: {}", full_path, full_dst_path, e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
