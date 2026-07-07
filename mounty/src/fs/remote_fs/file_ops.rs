@@ -4,27 +4,31 @@ use crate::fs::utils::path;
 use crate::fs::utils::runtime;
 use libc::{O_APPEND, O_EXCL, O_TRUNC, O_WRONLY};
 use std::ffi::OsStr;
-use std::time::{Duration};
-use tracing::{debug, error};
+use std::time::Duration;
+use tracing::{debug, error, trace};
 
 use super::RemoteFileSystem;
 
 impl RemoteFileSystem {
     /// Open a file (validate that it exists and allocate a file handle)
     pub fn open(&mut self, ino: u64, flags: i32) -> Result<u64, HttpError> {
+        self.ensure_running()?;
         let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
         let client = self.http_client.clone();
         let path_clone = path.clone();
 
         // Validate file exists and get size
-        let mut meta = runtime::runtime().block_on(async move { client.get_file_metadata(&path_clone).await })?;
+        let mut meta = runtime::runtime()
+            .block_on(async move { client.get_file_metadata(&path_clone).await })?;
 
         let truncate = (flags & O_TRUNC) != 0;
         if truncate {
             let client2 = self.http_client.clone();
             let path2 = path.clone();
             runtime::runtime().block_on(async move {
-                client2.put_file_stream(&path2, reqwest::Body::from(Vec::<u8>::new()), None, None).await
+                client2
+                    .put_file_stream(&path2, reqwest::Body::from(Vec::<u8>::new()), None, None)
+                    .await
             })?;
             meta.size = 0;
             self.metadata_cache_insert(&path, meta.clone());
@@ -39,7 +43,13 @@ impl RemoteFileSystem {
     }
 
     /// Read bytes from a file by inode
-    pub fn read_bytes(&self, ino: u64, fh: Option<u64>, offset: u64, size: usize) -> Result<Vec<u8>, HttpError> {
+    pub fn read_bytes(
+        &self,
+        ino: u64,
+        fh: Option<u64>,
+        offset: u64,
+        size: usize,
+    ) -> Result<Vec<u8>, HttpError> {
         let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
 
         // Use cached file size from FhState if available, avoiding a metadata HTTP call
@@ -54,7 +64,8 @@ impl RemoteFileSystem {
             // Fallback: fetch metadata to determine file size
             let client = self.http_client.clone();
             let path_clone = path.clone();
-            let meta = runtime::runtime().block_on(async move { client.get_file_metadata(&path_clone).await })?;
+            let meta = runtime::runtime()
+                .block_on(async move { client.get_file_metadata(&path_clone).await })?;
             if offset >= meta.size {
                 return Ok(Vec::new());
             }
@@ -97,7 +108,10 @@ impl RemoteFileSystem {
                             let result = buf_ref[start_idx..start_idx + to_read].to_vec();
                             tracing::trace!(
                                 "read-ahead HIT: offset={} size={} buf_offset={} buf_len={}",
-                                offset, to_read, buf_offset, buf_len
+                                offset,
+                                to_read,
+                                buf_offset,
+                                buf_len
                             );
                             return Ok(result);
                         }
@@ -120,7 +134,9 @@ impl RemoteFileSystem {
                         let client = self.http_client.clone();
                         let path_clone = path.clone();
                         let data = runtime::runtime().block_on(async move {
-                            client.read_range(&path_clone, fetch_offset, fetch_size).await
+                            client
+                                .read_range(&path_clone, fetch_offset, fetch_size)
+                                .await
                         })?;
 
                         // Update buffer
@@ -152,7 +168,8 @@ impl RemoteFileSystem {
         // Fallback: direct HTTP read (no file handle or write-only file)
         let client = self.http_client.clone();
         let path_clone = path.clone();
-        runtime::runtime().block_on(async move { client.read_range(&path_clone, offset, to_read).await })
+        runtime::runtime()
+            .block_on(async move { client.read_range(&path_clone, offset, to_read).await })
     }
 
     /// Create a file
@@ -164,6 +181,7 @@ impl RemoteFileSystem {
         umask: u32,
         flags: i32,
     ) -> Result<(Duration, super::FileAttr, u64, u64, u32), HttpError> {
+        self.ensure_running()?;
         let name_str = match name.to_str() {
             Some(s) => s,
             None => {
@@ -215,7 +233,12 @@ impl RemoteFileSystem {
                     let path2 = full_path.clone();
                     if let Err(e) = runtime::runtime().block_on(async move {
                         client2
-                            .put_file_stream(&path2, reqwest::Body::from(Vec::<u8>::new()), None, None)
+                            .put_file_stream(
+                                &path2,
+                                reqwest::Body::from(Vec::<u8>::new()),
+                                None,
+                                None,
+                            )
                             .await
                     }) {
                         error!("create (truncate) failed: {}", e);
@@ -272,10 +295,12 @@ impl RemoteFileSystem {
         _flags: i32,
         _lock_owner: Option<u64>,
     ) -> Result<u32, HttpError> {
+        self.ensure_running()?;
         let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
         let off = offset as u64;
 
-        let state = self.fh_manager
+        let state = self
+            .fh_manager
             .get_fh_state(fh)
             .ok_or_else(|| HttpError::Other("invalid file handle".into()))?;
 
@@ -328,7 +353,8 @@ impl RemoteFileSystem {
 
     /// Flush the write buffer to the server synchronously
     pub(crate) fn flush_write_buffer(&mut self, fh: u64, path: &str) -> Result<(), HttpError> {
-        let state = self.fh_manager
+        let state = self
+            .fh_manager
             .get_fh_state(fh)
             .ok_or_else(|| HttpError::Other("invalid file handle".into()))?;
 
@@ -342,7 +368,9 @@ impl RemoteFileSystem {
 
         tracing::info!(
             "[DIAG] flush_write_buffer: path={} offset={} size={}",
-            path, offset, buf_len
+            path,
+            offset,
+            buf_len
         );
 
         let client = self.http_client.clone();
@@ -354,14 +382,24 @@ impl RemoteFileSystem {
         });
 
         if let Err(e) = result {
-            state.pending_write_errors.borrow_mut().push(format!("PUT at offset {}: {}", offset, e));
-            tracing::error!("[DIAG] flush_write_buffer FAILED: path={} offset={} error={}", path, offset, e);
+            state
+                .pending_write_errors
+                .borrow_mut()
+                .push(format!("PUT at offset {}: {}", offset, e));
+            tracing::error!(
+                "[DIAG] flush_write_buffer FAILED: path={} offset={} error={}",
+                path,
+                offset,
+                e
+            );
             return Err(e);
         }
 
         tracing::info!(
             "[DIAG] flush_write_buffer OK: path={} offset={} size={}",
-            path, offset, buf_len
+            path,
+            offset,
+            buf_len
         );
 
         // Advance buffer offset by actual bytes written
@@ -369,6 +407,86 @@ impl RemoteFileSystem {
         Ok(())
     }
 
+    pub fn flush_and_finalize_handle(&mut self, ino: u64, fh: u64) -> Result<(), HttpError> {
+        if let Some(state) = self.fh_manager.get_fh_state(fh) {
+            *state.read_buf.borrow_mut() = None;
+            *state.read_buf_len.borrow_mut() = 0;
+        }
+
+        let path = self.get_path_for_inode(ino).ok_or(HttpError::NotFound)?;
+        self.flush_write_buffer(fh, &path)?;
+
+        let (dirty, final_size) = {
+            let state = self
+                .fh_manager
+                .get_fh_state(fh)
+                .ok_or_else(|| HttpError::Other("invalid file handle".into()))?;
+            (state.dirty, state.file_size)
+        };
+
+        if dirty {
+            if let Some(final_size) = final_size {
+                let client = self.http_client.clone();
+                let path_clone = path.clone();
+                runtime::runtime().block_on(async move {
+                    client
+                        .put_file_stream(
+                            &path_clone,
+                            reqwest::Body::from(Vec::<u8>::new()),
+                            Some(0),
+                            Some(final_size),
+                        )
+                        .await
+                })?;
+                trace!("finalized fh {} with size {}", fh, final_size);
+            } else {
+                return Err(HttpError::Other(format!(
+                    "dirty file handle {} has no known final size",
+                    fh
+                )));
+            }
+        }
+
+        if let Some(state) = self.fh_manager.get_fh_state(fh) {
+            let errors = state.pending_write_errors.borrow();
+            if !errors.is_empty() {
+                return Err(HttpError::Other(format!(
+                    "{} pending write errors for fh {}: {:?}",
+                    errors.len(),
+                    fh,
+                    errors
+                )));
+            }
+            state.dirty = false;
+        }
+
+        Ok(())
+    }
+
+    pub fn shutdown_flush_all(&mut self) -> Result<(), Vec<(u64, HttpError)>> {
+        self.begin_shutdown();
+        let handles = self.fh_manager.open_handles();
+        let mut failures = Vec::new();
+
+        for (fh, ino) in handles {
+            match self.flush_and_finalize_handle(ino, fh) {
+                Ok(()) => self.fh_manager.release_fh(fh),
+                Err(err) => {
+                    error!("shutdown: failed to flush/finalize fh {}: {}", fh, err);
+                    failures.push((fh, err));
+                }
+            }
+        }
+
+        self.clear_caches();
+
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            self.mark_shutdown_failed();
+            Err(failures)
+        }
+    }
 
     /// Flush a buffer by splitting into multiple chunks and sending in parallel
     pub fn setattr(
@@ -379,6 +497,7 @@ impl RemoteFileSystem {
         _gid: Option<u32>,
         size: Option<u64>,
     ) -> Result<super::FileAttr, HttpError> {
+        self.ensure_running()?;
         // For now we just support size changes (truncate)
         let path = match self.get_path_for_inode(ino) {
             Some(p) => p,
@@ -408,19 +527,22 @@ impl RemoteFileSystem {
             match runtime::runtime().block_on(async move {
                 // Send with size hint so server knows this is a size-setting operation
                 client
-                    .put_file_stream(&path_clone, reqwest::Body::from(Vec::<u8>::new()), Some(0), Some(new_size))
+                    .put_file_stream(
+                        &path_clone,
+                        reqwest::Body::from(Vec::<u8>::new()),
+                        Some(0),
+                        Some(new_size),
+                    )
                     .await
             }) {
                 Ok(_) => {
                     // Update metadata cache immediately
-                    if let Ok(mut meta) = self.getattr(ino) {
-                        meta.size = new_size;
-                        // We need a FileEntry for the cache, let's just fetch it to be sure
-                        let c2 = self.http_client.clone();
-                        let p2 = path.clone();
-                        if let Ok(entry) = runtime::runtime().block_on(async move { c2.get_file_metadata(&p2).await }) {
-                            self.metadata_cache_insert(&path, entry);
-                        }
+                    let c2 = self.http_client.clone();
+                    let p2 = path.clone();
+                    if let Ok(entry) =
+                        runtime::runtime().block_on(async move { c2.get_file_metadata(&p2).await })
+                    {
+                        self.metadata_cache_insert(&path, entry);
                     }
                     // After truncation, get updated attributes
                     return self.getattr(ino);

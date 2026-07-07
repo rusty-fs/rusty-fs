@@ -119,6 +119,33 @@ mod tests {
     }
 
     #[test]
+    fn test_shutdown_rejects_new_open() {
+        let backend = Arc::new(FakeBackend::new());
+        let mut fs = RemoteFileSystem::new(backend);
+        let ino = fs.get_inode_for_path("/f.txt");
+
+        fs.begin_shutdown();
+
+        assert!(matches!(
+            fs.open(ino, libc::O_RDONLY),
+            Err(HttpError::ShuttingDown)
+        ));
+    }
+
+    #[test]
+    fn test_shutdown_flush_all_releases_clean_handles() {
+        let backend = Arc::new(FakeBackend::new());
+        let mut fs = RemoteFileSystem::new(backend);
+        let ino = fs.get_inode_for_path("/f.txt");
+        let fh = fs.open(ino, libc::O_RDONLY).expect("open should succeed");
+
+        assert!(fs.fh_manager.get_fh_state_ref(fh).is_some());
+        assert!(fs.shutdown_flush_all().is_ok());
+        assert!(fs.is_shutting_down());
+        assert!(fs.fh_manager.get_fh_state_ref(fh).is_none());
+    }
+
+    #[test]
     fn test_readdir_entries_offsets() {
         let backend = Arc::new(FakeBackend::new());
         let mut fs = RemoteFileSystem::new(backend.clone());
