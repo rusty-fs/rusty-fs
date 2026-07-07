@@ -23,13 +23,21 @@ jobs:
       - name: Cache Cargo Dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Check Formatting
+      - name: Check Formatting (Filer)
         run: cargo fmt --all -- --check
+        working-directory: ./filer
 
-      - name: Run Clippy
-        # The spec review mentions clippy fails, so we won't strictly enforce -D warnings here for now,
-        # or we just run it normally so it shows warnings.
+      - name: Check Formatting (Mounty)
+        run: cargo fmt --all -- --check
+        working-directory: ./mounty
+
+      - name: Run Clippy (Filer)
         run: cargo clippy --all-targets --all-features
+        working-directory: ./filer
+
+      - name: Run Clippy (Mounty)
+        run: cargo clippy --all-targets --all-features
+        working-directory: ./mounty
 
       - name: Run Unit Tests (Filer)
         run: cargo test
