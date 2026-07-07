@@ -10,7 +10,7 @@ on:
 jobs:
   fuse-perf-matrix:
     if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-e2e')
-    name: Payload ${{ matrix.file_size }}MB | Chunk ${{ matrix.chunk_label }}
+    name: E2E Perf Matrix
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
