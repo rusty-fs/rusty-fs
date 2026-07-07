@@ -93,7 +93,7 @@ impl Default for FuseConfig {
         Self {
             ttl: Duration::from_secs(1),
             max_buffer_size: 8 * 1024 * 1024, // 8 MB
-            chunk_size: 4 * 1024 * 1024, // 4 MB
+            chunk_size: 4 * 1024 * 1024,      // 4 MB
             listing_cache_ttl: Duration::from_millis(500),
             listing_cache_capacity: 1024,
         }
