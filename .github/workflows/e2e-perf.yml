@@ -4,10 +4,12 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
+    types: [labeled, synchronize]
     branches: [ "**" ]
 
 jobs:
   fuse-perf-matrix:
+    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-e2e')
     name: Payload ${{ matrix.file_size }}MB | Chunk ${{ matrix.chunk_label }}
     runs-on: ubuntu-latest
     strategy:
@@ -38,7 +40,7 @@ jobs:
       - name: Install OS Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y fuse iperf3 iproute2 bc pkg-config libfuse-dev libfuse3-dev
+          sudo apt-get install -y fuse3 iperf3 iproute2 bc pkg-config libfuse3-dev
 
       - name: Build Filer and Mounty (Release)
         run: |
