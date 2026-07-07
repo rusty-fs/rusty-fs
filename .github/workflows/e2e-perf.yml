@@ -4,7 +4,7 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "**" ]
 
 jobs:
   fuse-perf-matrix:
@@ -38,7 +38,7 @@ jobs:
       - name: Install OS Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y fuse iperf3 iproute2 bc
+          sudo apt-get install -y fuse iperf3 iproute2 bc pkg-config libfuse-dev libfuse3-dev
 
       - name: Build Filer and Mounty (Release)
         run: |
@@ -48,9 +48,9 @@ jobs:
       - name: Run Performance Test
         env:
           MOUNTY_CHUNK_SIZE: ${{ matrix.chunk_size }}
-          MOUNTY_MAX_BUFFER_SIZE: ${{ matrix.chunk_size * 2 }}
           SKIP_BUILD: 1
         run: |
+          export MOUNTY_MAX_BUFFER_SIZE=$(($MOUNTY_CHUNK_SIZE * 2))
           # Diamo i permessi di lettura/scrittura a FUSE (spesso richiesto sui runner standard)
           sudo chmod a+rw /dev/fuse
           
