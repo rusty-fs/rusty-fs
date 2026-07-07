@@ -12,7 +12,7 @@ proptest! {
         assert!(res.is_ok());
         let (s, trunc, total) = res.unwrap();
         assert_eq!(s, start);
-        assert_eq!(trunc, false);
+        assert!(!trunc);
         assert_eq!(total, Some(end + 1));
     }
 
@@ -23,7 +23,7 @@ proptest! {
         assert!(res.is_ok());
         let (s, trunc, total) = res.unwrap();
         assert_eq!(s, start);
-        assert_eq!(trunc, false);
+        assert!(!trunc);
         assert_eq!(total, None);
     }
 
