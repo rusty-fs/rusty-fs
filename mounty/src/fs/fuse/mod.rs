@@ -297,7 +297,16 @@ impl Filesystem for RemoteFileSystem {
         reply: ReplyAttr,
     ) {
         debug!("setattr called for ino {} with size {:?}", ino, size);
-        match self.setattr(ino, _mode, _uid, _gid, size) {
+        let atime_sys = _atime.map(|t| match t {
+            fuser::TimeOrNow::SpecificTime(st) => st,
+            fuser::TimeOrNow::Now => std::time::SystemTime::now(),
+        });
+        let mtime_sys = _mtime.map(|t| match t {
+            fuser::TimeOrNow::SpecificTime(st) => st,
+            fuser::TimeOrNow::Now => std::time::SystemTime::now(),
+        });
+
+        match self.setattr(ino, _mode, _uid, _gid, size, atime_sys, mtime_sys) {
             Ok(mut attr) => {
                 if let Some(m) = _mode {
                     attr.perm = m as u16;

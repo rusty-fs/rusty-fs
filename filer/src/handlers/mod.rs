@@ -21,6 +21,7 @@ use tokio::fs::File as TokioFile;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, trace};
+use filetime::{set_file_times, FileTime};
 
 pub async fn list(
     requested_path: Option<Path<String>>,
@@ -326,7 +327,7 @@ pub async fn delete_path(
     match fs::metadata(&full_path) {
         Ok(meta) => {
             if meta.is_dir() {
-                match fs::remove_dir_all(&full_path) {
+                match fs::remove_dir(&full_path) {
                     Ok(_) => Ok(StatusCode::NO_CONTENT),
                     Err(e) => {
                         error!("Failed to delete directory {:?}: {}", full_path, e);
@@ -528,14 +529,17 @@ struct FileEntry {
 }
 
 #[derive(serde::Deserialize)]
-pub struct RenameRequest {
-    new_name: String,
+pub struct UpdateMetaRequest {
+    new_name: Option<String>,
+    mode: Option<u32>,
+    mtime: Option<u64>,
+    atime: Option<u64>,
 }
 
-pub async fn rename(
+pub async fn update_meta(
     file_path: Path<String>,
     Extension(base_dir): Extension<Arc<String>>,
-    Json(payload): Json<RenameRequest>,
+    Json(payload): Json<UpdateMetaRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let requested_raw = file_path.0;
     if requested_raw.contains("..") {
@@ -547,22 +551,52 @@ pub async fn rename(
     }
 
     let full_path = PathBuf::from(base_dir.trim_end_matches('/')).join(&requested);
-
-    let dst_raw = payload.new_name;
-    if dst_raw.contains("..") {
-        return Err(StatusCode::BAD_REQUEST);
+    if !full_path.exists() {
+        return Err(StatusCode::NOT_FOUND);
     }
-    let dst_requested = dst_raw.trim_start_matches('/').to_string();
-    if dst_requested.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let full_dst_path = PathBuf::from(base_dir.trim_end_matches('/')).join(&dst_requested);
 
-    debug!("Renaming {} to {}", requested, dst_requested);
-
-    if let Some(parent) = full_dst_path.parent() {
-        let _ = fs::create_dir_all(parent);
+    // Process mode updates
+    if let Some(mode) = payload.mode {
+        debug!("Setting permissions {:o} for {:?}", mode, full_path);
+        if let Ok(mut perms) = fs::metadata(&full_path).map(|m| m.permissions()) {
+            perms.set_mode(mode);
+            if let Err(e) = fs::set_permissions(&full_path, perms) {
+                error!("Failed to set permissions on {:?}: {}", full_path, e);
+            }
+        }
     }
+
+    // Process timestamp updates
+    if payload.atime.is_some() || payload.mtime.is_some() {
+        if let Ok(meta) = fs::metadata(&full_path) {
+            let atime = payload.atime.map(|t| filetime::FileTime::from_unix_time(t as i64, 0))
+                .unwrap_or_else(|| filetime::FileTime::from_last_access_time(&meta));
+            let mtime = payload.mtime.map(|t| filetime::FileTime::from_unix_time(t as i64, 0))
+                .unwrap_or_else(|| filetime::FileTime::from_last_modification_time(&meta));
+            
+            debug!("Setting timestamps (atime: {:?}, mtime: {:?}) for {:?}", atime, mtime, full_path);
+            if let Err(e) = filetime::set_file_times(&full_path, atime, mtime) {
+                error!("Failed to set timestamps on {:?}: {}", full_path, e);
+            }
+        }
+    }
+
+    // Process rename if new_name is provided
+    if let Some(dst_raw) = payload.new_name {
+        if dst_raw.contains("..") {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        let dst_requested = dst_raw.trim_start_matches('/').to_string();
+        if dst_requested.is_empty() {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        let full_dst_path = PathBuf::from(base_dir.trim_end_matches('/')).join(&dst_requested);
+
+        debug!("Renaming {} to {}", requested, dst_requested);
+
+        if let Some(parent) = full_dst_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
 
     match tokio::fs::rename(&full_path, &full_dst_path).await {
         Ok(_) => Ok(StatusCode::NO_CONTENT),
@@ -574,6 +608,8 @@ pub async fn rename(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+
+    Ok(StatusCode::OK)
 }
 
 #[cfg(test)]

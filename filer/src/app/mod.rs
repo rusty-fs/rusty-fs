@@ -1,4 +1,4 @@
-use crate::handlers::{delete_path, list, meta, mkdir, put_file, read, rename};
+use crate::handlers::{delete_path, list, meta, mkdir, put_file, read, update_meta};
 use axum::extract::DefaultBodyLimit;
 use axum::{
     Extension, Router,
@@ -14,11 +14,11 @@ pub fn build_app(shared_base_dir: Arc<String>) -> Router {
         .route("/list/", get(list))
         .route("/list/{*path}", get(list))
         .route("/meta/{*file_path}", get(meta))
+        .route("/meta/{*file_path}", patch(update_meta))
         .route("/files/{*file_path}", get(read))
         .route("/mkdir/{*file_path}", post(mkdir))
         .route("/files/{*file_path}", delete(delete_path))
         .route("/files/{*file_path}", put(put_file))
-        .route("/files/{*file_path}", patch(rename))
         .layer(Extension(shared_base_dir))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB limit
         .layer(
