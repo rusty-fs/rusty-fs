@@ -1,7 +1,10 @@
 // FUSE trait implementation for RemoteFileSystem
 
 use crate::fs::remote_fs::RemoteFileSystem;
-use fuser::{Filesystem, ReplyAttr, ReplyDirectory, ReplyEntry, ReplyEmpty, ReplyXattr, Request, KernelConfig};
+use fuser::{
+    Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyXattr,
+    Request,
+};
 use libc::ENOENT;
 use std::ffi::OsStr;
 use std::time::SystemTime;
@@ -193,7 +196,10 @@ impl Filesystem for RemoteFileSystem {
         _flags: u32,
         reply: fuser::ReplyEmpty,
     ) {
-        debug!("rename called: parent={}, name={:?}, newparent={}, newname={:?}", parent, name, newparent, newname);
+        debug!(
+            "rename called: parent={}, name={:?}, newparent={}, newname={:?}",
+            parent, name, newparent, newname
+        );
 
         match self.rename(parent, name, newparent, newname) {
             Ok(_) => reply.ok(),
@@ -281,10 +287,18 @@ impl Filesystem for RemoteFileSystem {
         debug!("setattr called for ino {} with size {:?}", ino, size);
         match self.setattr(ino, _mode, _uid, _gid, size) {
             Ok(mut attr) => {
-                if let Some(m) = _mode { attr.perm = m as u16; }
-                if let Some(u) = _uid { attr.uid = u; }
-                if let Some(g) = _gid { attr.gid = g; }
-                if let Some(f) = _flags { attr.flags = f; }
+                if let Some(m) = _mode {
+                    attr.perm = m as u16;
+                }
+                if let Some(u) = _uid {
+                    attr.uid = u;
+                }
+                if let Some(g) = _gid {
+                    attr.gid = g;
+                }
+                if let Some(f) = _flags {
+                    attr.flags = f;
+                }
 
                 if let Some(t) = _atime {
                     attr.atime = match t {
@@ -298,8 +312,12 @@ impl Filesystem for RemoteFileSystem {
                         fuser::TimeOrNow::Now => std::time::SystemTime::now(),
                     };
                 }
-                if let Some(t) = _ctime { attr.ctime = t; }
-                if let Some(t) = _crtime { attr.crtime = t; }
+                if let Some(t) = _ctime {
+                    attr.ctime = t;
+                }
+                if let Some(t) = _crtime {
+                    attr.crtime = t;
+                }
 
                 reply.attr(&self.config.ttl, &attr);
             }
@@ -341,7 +359,6 @@ impl Filesystem for RemoteFileSystem {
 
         reply.ok();
     }
-
 
     fn fallocate(
         &mut self,
@@ -389,7 +406,12 @@ impl Filesystem for RemoteFileSystem {
                         let path_clone = path.clone();
                         if let Err(e) = crate::fs::utils::runtime().block_on(async move {
                             client
-                                .put_file_stream(&path_clone, reqwest::Body::from(Vec::<u8>::new()), Some(0), Some(final_size))
+                                .put_file_stream(
+                                    &path_clone,
+                                    reqwest::Body::from(Vec::<u8>::new()),
+                                    Some(0),
+                                    Some(final_size),
+                                )
                                 .await
                         }) {
                             error!("release: finalization PUT failed for fh {}: {}", fh, e);
@@ -402,7 +424,12 @@ impl Filesystem for RemoteFileSystem {
                 // Check for any pending write errors
                 let errors = state.pending_write_errors.borrow();
                 if !errors.is_empty() {
-                    error!("release: {} pending write errors for fh {}: {:?}", errors.len(), fh, errors);
+                    error!(
+                        "release: {} pending write errors for fh {}: {:?}",
+                        errors.len(),
+                        fh,
+                        errors
+                    );
                 }
             }
         }

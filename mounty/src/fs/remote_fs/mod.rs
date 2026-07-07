@@ -1,14 +1,14 @@
-use crate::fs::utils::inode_map::InodeMapper;
 use crate::fs::config::FuseConfig;
 use crate::fs::http::{FileEntry, HttpBackend};
 use crate::fs::utils::file_handle::FhManager;
+use crate::fs::utils::inode_map::InodeMapper;
 use fuser::{FileAttr, FileType};
-use std::sync::Arc;
-use std::time::{Duration, UNIX_EPOCH};
-use std::collections::HashMap;
-use std::sync::{RwLock, Mutex};
-use std::time::Instant;
 use indexmap::map::IndexMap;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::{Mutex, RwLock};
+use std::time::Instant;
+use std::time::{Duration, UNIX_EPOCH};
 
 pub mod dir_ops;
 pub mod file_ops;
@@ -169,7 +169,11 @@ impl RemoteFileSystem {
                 // mark as recently used by removing and reinserting
                 map.shift_remove(dir);
                 map.insert(dir.to_string(), (expiry, entries_clone.clone()));
-                tracing::debug!("listing_cache hit for {} (entries={})", dir, entries_clone.len());
+                tracing::debug!(
+                    "listing_cache hit for {} (entries={})",
+                    dir,
+                    entries_clone.len()
+                );
                 return Some(entries_clone);
             } else {
                 // expired; remove it
