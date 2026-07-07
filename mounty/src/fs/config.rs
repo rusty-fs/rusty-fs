@@ -53,7 +53,7 @@ impl FuseConfig {
             max_buffer_size,
             chunk_size,
             listing_cache_ttl: Duration::from_millis(listing_cache_ttl_ms),
-            listing_cache_capacity: listing_cache_capacity,
+            listing_cache_capacity,
         }
     }
 

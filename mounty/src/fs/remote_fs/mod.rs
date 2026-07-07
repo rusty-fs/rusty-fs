@@ -129,7 +129,7 @@ impl RemoteFileSystem {
         FileAttr {
             ino: inode,
             size: entry.size,
-            blocks: (entry.size + 511) / 512,
+            blocks: entry.size.div_ceil(512),
             atime: modified,
             mtime: modified,
             ctime: modified,
@@ -197,7 +197,7 @@ impl RemoteFileSystem {
         }
         let mut map = self.listing_cache.lock().unwrap();
         if let Some(value) = map.get(dir) {
-            let expiry = value.0.clone();
+            let expiry = value.0;
             let entries_clone = value.1.clone();
             if Instant::now() < expiry {
                 // mark as recently used by removing and reinserting
@@ -253,7 +253,7 @@ impl RemoteFileSystem {
         }
         let mut map = self.metadata_cache.lock().unwrap();
         if let Some(value) = map.get(path) {
-            let expiry = value.0.clone();
+            let expiry = value.0;
             let entry_clone = value.1.clone();
             if Instant::now() < expiry {
                 // mark as recently used

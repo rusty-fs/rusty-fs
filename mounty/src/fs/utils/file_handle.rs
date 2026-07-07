@@ -48,8 +48,8 @@ impl FhManager {
         Self {
             next_fh: 1,
             fh_map: HashMap::new(),
-            read_buf_cap: 4 * 1024 * 1024,  // 4 MB default
-            write_buf_cap: 1 * 1024 * 1024, // 1 MB default
+            read_buf_cap: 4 * 1024 * 1024, // 4 MB default
+            write_buf_cap: 1024 * 1024,    // 1 MB default
         }
     }
 

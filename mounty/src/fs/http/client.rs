@@ -18,6 +18,8 @@ pub enum HttpError {
     ShuttingDown,
     #[error("network error: {0}")]
     Network(String),
+    #[error("directory not empty")]
+    DirectoryNotEmpty,
     #[error("other: {0}")]
     Other(String),
 }
@@ -29,6 +31,7 @@ impl HttpError {
             HttpError::PermissionDenied => EACCES,
             HttpError::AlreadyExists => libc::EEXIST,
             HttpError::ShuttingDown => libc::ESHUTDOWN,
+            HttpError::DirectoryNotEmpty => libc::ENOTEMPTY,
             HttpError::Network(_) | HttpError::Other(_) => EIO,
         }
     }
@@ -38,6 +41,7 @@ impl HttpError {
             StatusCode::NOT_FOUND => HttpError::NotFound,
             StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED => HttpError::PermissionDenied,
             StatusCode::CONFLICT => HttpError::AlreadyExists,
+            StatusCode::UNPROCESSABLE_ENTITY => HttpError::DirectoryNotEmpty,
             _ => HttpError::Other(format!("HTTP {}: {}", status, text)),
         }
     }
@@ -117,17 +121,16 @@ impl HttpBackend for HttpClient {
 
                 let listing: DirectoryListing =
                     serde_json::from_str(&response_text).map_err(|e| {
-                        HttpError::Other(
-                            format!("JSON parse error: {} - Response: {}", e, response_text).into(),
-                        )
+                        HttpError::Other(format!(
+                            "JSON parse error: {} - Response: {}",
+                            e, response_text
+                        ))
                     })?;
 
                 Ok(listing.files)
             }
             Err(e) => {
-                return Err(HttpError::Other(
-                    format!("Failed to send request: {}", e),
-                ));
+                return Err(HttpError::Other(format!("Failed to send request: {}", e)));
             }
         }
     }
@@ -149,9 +152,10 @@ impl HttpBackend for HttpClient {
             return Err(HttpError::from_status(status, &text));
         }
         let entry: FileEntry = serde_json::from_str(&text).map_err(|e| {
-            HttpError::Other(
-                format!("JSON parse error for metadata: {} - Response: {}", e, text),
-            )
+            HttpError::Other(format!(
+                "JSON parse error for metadata: {} - Response: {}",
+                e, text
+            ))
         })?;
         Ok(entry)
     }
@@ -269,7 +273,7 @@ impl HttpBackend for HttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use httpmock::Method::{GET, POST, DELETE, PUT, PATCH};
+    use httpmock::Method::{DELETE, GET, PATCH, POST, PUT};
     use httpmock::MockServer;
     use serde_json::json;
     use tokio;
@@ -361,10 +365,12 @@ mod tests {
     #[tokio::test]
     async fn test_create_directory_success() {
         let server = MockServer::start_async().await;
-        let _mock = server.mock_async(|when, then| {
-            when.method(POST).path("/mkdir/new_dir");
-            then.status(200);
-        }).await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/mkdir/new_dir");
+                then.status(200);
+            })
+            .await;
 
         let client = make_client(&server.base_url());
         let result = client.create_directory("/new_dir").await;
@@ -374,10 +380,12 @@ mod tests {
     #[tokio::test]
     async fn test_delete_path_success() {
         let server = MockServer::start_async().await;
-        let _mock = server.mock_async(|when, then| {
-            when.method(DELETE).path("/files/old_dir");
-            then.status(200);
-        }).await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(DELETE).path("/files/old_dir");
+                then.status(200);
+            })
+            .await;
 
         let client = make_client(&server.base_url());
         let result = client.delete_path("/old_dir").await;
@@ -387,10 +395,12 @@ mod tests {
     #[tokio::test]
     async fn test_update_meta_success() {
         let server = MockServer::start_async().await;
-        let _mock = server.mock_async(|when, then| {
-            when.method(PATCH).path("/meta/file.txt");
-            then.status(200);
-        }).await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(PATCH).path("/meta/file.txt");
+                then.status(200);
+            })
+            .await;
 
         let client = make_client(&server.base_url());
         let body = json!({"permissions": 0o777});
@@ -401,10 +411,12 @@ mod tests {
     #[tokio::test]
     async fn test_rename_success() {
         let server = MockServer::start_async().await;
-        let _mock = server.mock_async(|when, then| {
-            when.method(PATCH).path("/meta/old.txt");
-            then.status(200);
-        }).await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(PATCH).path("/meta/old.txt");
+                then.status(200);
+            })
+            .await;
 
         let client = make_client(&server.base_url());
         let result = client.rename("/old.txt", "new.txt").await;
@@ -414,15 +426,20 @@ mod tests {
     #[tokio::test]
     async fn test_put_file_stream_success() {
         let server = MockServer::start_async().await;
-        let _mock = server.mock_async(|when, then| {
-            when.method(PUT).path("/files/file.txt")
-                .header("Content-Range", "bytes 5-*/10");
-            then.status(200);
-        }).await;
+        let _mock = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/files/file.txt")
+                    .header("Content-Range", "bytes 5-*/10");
+                then.status(200);
+            })
+            .await;
 
         let client = make_client(&server.base_url());
         let body = reqwest::Body::from(vec![1, 2, 3]);
-        let result = client.put_file_stream("/file.txt", body, Some(5), Some(10)).await;
+        let result = client
+            .put_file_stream("/file.txt", body, Some(5), Some(10))
+            .await;
         assert!(result.is_ok());
     }
 }

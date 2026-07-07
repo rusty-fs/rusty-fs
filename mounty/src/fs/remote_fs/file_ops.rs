@@ -524,16 +524,17 @@ impl RemoteFileSystem {
                     payload.insert("mtime".to_string(), serde_json::json!(dur.as_secs()));
                 }
             }
-            
+
             let client = self.http_client.clone();
             let p = path.clone();
             if let Err(e) = runtime::runtime().block_on(async move {
-                client.update_meta(&p, serde_json::Value::Object(payload)).await
+                client
+                    .update_meta(&p, serde_json::Value::Object(payload))
+                    .await
             }) {
                 error!("setattr metadata update failed: {}", e);
             }
         }
-
 
         if let Some(new_size) = size {
             debug!("truncating file {} to size {}", path, new_size);
@@ -581,6 +582,6 @@ impl RemoteFileSystem {
                 }
             }
         }
-        Ok(self.getattr(ino)?)
+        self.getattr(ino)
     }
 }

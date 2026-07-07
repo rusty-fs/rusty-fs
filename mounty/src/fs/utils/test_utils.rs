@@ -199,7 +199,7 @@ impl HttpBackend for FakeBackend {
         metadata.insert(
             path.to_string(),
             FileEntry {
-                name: path.split('/').last().unwrap_or("").to_string(),
+                name: path.split('/').next_back().unwrap_or("").to_string(),
                 is_dir: false,
                 size: data.len() as u64,
                 modified: Some(
