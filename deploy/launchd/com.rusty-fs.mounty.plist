@@ -6,6 +6,15 @@
   <key>Label</key>
   <string>com.rusty-fs.mounty</string>
 
+  <!--
+  Run mounty as the user that should create and access the FUSE mount.
+  Uncomment and adjust these values for your deployment.
+  <key>UserName</key>
+  <string>matteo</string>
+  <key>GroupName</key>
+  <string>staff</string>
+  -->
+
   <key>ProgramArguments</key>
   <array>
     <string>/usr/local/bin/mounty</string>
@@ -21,7 +30,7 @@
     <string>4194304</string>
     <key>MOUNTY_MAX_BUFFER_SIZE</key>
     <string>8388608</string>
-    <!-- Set these to the user/group that should own files in the mounted FUSE view. -->
+    <!-- Set these to the UID/GID that should own files in the mounted FUSE view. -->
     <!--
     <key>MOUNTY_UID</key>
     <string>501</string>

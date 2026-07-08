@@ -33,14 +33,17 @@ launchd templates.
 ### Ownership
 
 `mounty` exposes file ownership through FUSE attributes. By default it uses the
-UID/GID of the running process. When running as a system daemon, set:
+UID/GID of the running process. When running as a system daemon, run the service
+as the user that should access the mount and set matching ownership:
 
 ```bash
 MOUNTY_UID=<uid>
 MOUNTY_GID=<gid>
 ```
 
-to make the mounted filesystem appear owned by the intended user.
+For systemd this means `User=`/`Group=` plus `MOUNTY_UID`/`MOUNTY_GID`. For
+launchd LaunchDaemons this means `UserName`/`GroupName` plus
+`MOUNTY_UID`/`MOUNTY_GID`.
 
 ## Dependencies
 

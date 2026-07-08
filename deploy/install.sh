@@ -121,6 +121,46 @@ prompt_choice() {
     done
 }
 
+prompt_yes_no() {
+    local var_name="$1"
+    local label="$2"
+    local default_value="$3"
+    local input_value
+
+    if [ "$ASSUME_YES" -eq 1 ]; then
+        case "$default_value" in
+            y|Y|yes|YES) printf -v "$var_name" '1' ;;
+            n|N|no|NO) printf -v "$var_name" '0' ;;
+            *)
+                echo "ERROR: invalid yes/no default: $default_value" >&2
+                exit 1
+                ;;
+        esac
+        return
+    fi
+
+    while true; do
+        read -r -p "$label [$default_value]: " input_value
+        if [ -z "$input_value" ]; then
+            input_value="$default_value"
+        fi
+
+        case "$input_value" in
+            y|Y|yes|YES)
+                printf -v "$var_name" '1'
+                return
+                ;;
+            n|N|no|NO)
+                printf -v "$var_name" '0'
+                return
+                ;;
+            *)
+                echo "Please answer y or n"
+                ;;
+        esac
+    done
+}
+
 run() {
     if [ "$DRY_RUN" -eq 1 ]; then
         printf '[dry-run] '
@@ -174,6 +214,34 @@ require_command() {
         echo "ERROR: required command not found: $command_name" >&2
         exit 1
     fi
+}
+
+uid_for_user() {
+    local user_name="$1"
+    id -u "$user_name" 2>/dev/null || true
+}
+
+gid_for_group() {
+    local group_name="$1"
+    local gid=""
+
+    if command -v getent >/dev/null 2>&1; then
+        gid="$(getent group "$group_name" | awk -F: '{print $3}')"
+    fi
+
+    if [ -z "$gid" ] && command -v dscl >/dev/null 2>&1; then
+        gid="$(dscl . -read "/Groups/$group_name" PrimaryGroupID 2>/dev/null | awk '{print $2}')"
+    fi
+
+    if [ -z "$gid" ] && command -v dscacheutil >/dev/null 2>&1; then
+        gid="$(dscacheutil -q group -a name "$group_name" 2>/dev/null | awk '/^gid: / {print $2; exit}')"
+    fi
+
+    if [ -z "$gid" ]; then
+        gid="$(id -g "$group_name" 2>/dev/null || true)"
+    fi
+
+    printf '%s' "$gid"
 }
 
 warn_if_mounty_backend_unreachable() {
@@ -238,6 +306,11 @@ DEFAULT_SERVER_URL="http://127.0.0.1:${DEFAULT_PORT}"
 DEFAULT_RUST_LOG="info"
 DEFAULT_CHUNK_SIZE="4194304"
 DEFAULT_MAX_BUFFER_SIZE="8388608"
+DEFAULT_MOUNTY_USER="${SUDO_USER:-$(id -un)}"
+if [ "$DEFAULT_MOUNTY_USER" = "root" ] && [ "$(id -un)" != "root" ]; then
+    DEFAULT_MOUNTY_USER="$(id -un)"
+fi
+DEFAULT_MOUNTY_GROUP="$(id -gn "$DEFAULT_MOUNTY_USER" 2>/dev/null || id -gn)"
 DEFAULT_MOUNTY_UID="${SUDO_UID:-$(id -u)}"
 DEFAULT_MOUNTY_GID="${SUDO_GID:-$(id -g)}"
 
@@ -257,8 +330,11 @@ SERVER_URL="$DEFAULT_SERVER_URL"
 MOUNTPOINT="$DEFAULT_MOUNTPOINT"
 CHUNK_SIZE="$DEFAULT_CHUNK_SIZE"
 MAX_BUFFER_SIZE="$DEFAULT_MAX_BUFFER_SIZE"
+MOUNTY_RUN_USER="$DEFAULT_MOUNTY_USER"
+MOUNTY_RUN_GROUP="$DEFAULT_MOUNTY_GROUP"
 MOUNTY_UID="$DEFAULT_MOUNTY_UID"
 MOUNTY_GID="$DEFAULT_MOUNTY_GID"
+MOUNTY_EXPOSE_SAME_OWNER=1
 
 if install_filer; then
     prompt BASE_DIR "filer BASE_DIR" "$DEFAULT_BASE_DIR"
@@ -276,8 +352,25 @@ prompt RUST_LOG_VALUE "RUST_LOG" "$DEFAULT_RUST_LOG"
 if install_mounty; then
     prompt CHUNK_SIZE "MOUNTY_CHUNK_SIZE" "$DEFAULT_CHUNK_SIZE"
     prompt MAX_BUFFER_SIZE "MOUNTY_MAX_BUFFER_SIZE" "$DEFAULT_MAX_BUFFER_SIZE"
-    prompt MOUNTY_UID "MOUNTY_UID exposed by FUSE" "$DEFAULT_MOUNTY_UID"
-    prompt MOUNTY_GID "MOUNTY_GID exposed by FUSE" "$DEFAULT_MOUNTY_GID"
+    prompt MOUNTY_RUN_USER "Run mounty service as user" "$DEFAULT_MOUNTY_USER"
+    prompt MOUNTY_RUN_GROUP "Run mounty service as group" "$DEFAULT_MOUNTY_GROUP"
+    prompt_yes_no MOUNTY_EXPOSE_SAME_OWNER "Expose mounted files as same user/group?" "y"
+
+    if [ "$MOUNTY_EXPOSE_SAME_OWNER" -eq 1 ]; then
+        MOUNTY_UID="$(uid_for_user "$MOUNTY_RUN_USER")"
+        MOUNTY_GID="$(gid_for_group "$MOUNTY_RUN_GROUP")"
+        if [ -z "$MOUNTY_UID" ]; then
+            echo "ERROR: could not resolve UID for user: $MOUNTY_RUN_USER" >&2
+            exit 1
+        fi
+        if [ -z "$MOUNTY_GID" ]; then
+            echo "ERROR: could not resolve GID for group: $MOUNTY_RUN_GROUP" >&2
+            exit 1
+        fi
+    else
+        prompt MOUNTY_UID "MOUNTY_UID exposed by FUSE" "$DEFAULT_MOUNTY_UID"
+        prompt MOUNTY_GID "MOUNTY_GID exposed by FUSE" "$DEFAULT_MOUNTY_GID"
+    fi
 fi
 
 if [ "$manager" = "launchd" ]; then
@@ -303,6 +396,8 @@ echo "  RUST_LOG:       $RUST_LOG_VALUE"
 if install_mounty; then
     echo "  chunk size:     $CHUNK_SIZE"
     echo "  max buffer:     $MAX_BUFFER_SIZE"
+    echo "  run as user:    $MOUNTY_RUN_USER"
+    echo "  run as group:   $MOUNTY_RUN_GROUP"
     echo "  mounty UID:     $MOUNTY_UID"
     echo "  mounty GID:     $MOUNTY_GID"
 fi
@@ -359,6 +454,7 @@ fi
 if install_mounty; then
     sudo_run install -m 0755 "$REPO_ROOT/mounty/target/release/mounty" "$BIN_DIR/mounty"
     sudo_run install -d "$MOUNTPOINT"
+    sudo_run chown "$MOUNTY_RUN_USER:$MOUNTY_RUN_GROUP" "$MOUNTPOINT"
 fi
 
 generate_systemd_files() {
@@ -398,6 +494,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=$MOUNTY_RUN_USER
+Group=$MOUNTY_RUN_GROUP
 Environment=RUST_LOG=$RUST_LOG_VALUE
 Environment=MOUNTY_CHUNK_SIZE=$CHUNK_SIZE
 Environment=MOUNTY_MAX_BUFFER_SIZE=$MAX_BUFFER_SIZE
@@ -428,7 +526,7 @@ xml_escape() {
 
 generate_launchd_files() {
     local bin_dir_xml base_dir_xml port_xml server_url_xml mountpoint_xml rust_log_xml
-    local chunk_xml max_buffer_xml log_dir_xml uid_xml gid_xml
+    local chunk_xml max_buffer_xml log_dir_xml uid_xml gid_xml run_user_xml run_group_xml
     bin_dir_xml="$(xml_escape "$BIN_DIR")"
     base_dir_xml="$(xml_escape "$BASE_DIR")"
     port_xml="$(xml_escape "$FILER_PORT")"
@@ -440,6 +538,8 @@ generate_launchd_files() {
     log_dir_xml="$(xml_escape "$LOG_DIR")"
     uid_xml="$(xml_escape "$MOUNTY_UID")"
     gid_xml="$(xml_escape "$MOUNTY_GID")"
+    run_user_xml="$(xml_escape "$MOUNTY_RUN_USER")"
+    run_group_xml="$(xml_escape "$MOUNTY_RUN_GROUP")"
 
     if install_filer; then
         cat > "$WORK_DIR/com.rusty-fs.filer.plist" <<EOF
@@ -490,6 +590,10 @@ EOF
 <dict>
   <key>Label</key>
   <string>com.rusty-fs.mounty</string>
+  <key>UserName</key>
+  <string>$run_user_xml</string>
+  <key>GroupName</key>
+  <string>$run_group_xml</string>
   <key>ProgramArguments</key>
   <array>
     <string>$bin_dir_xml/mounty</string>
@@ -570,6 +674,7 @@ install_launchd() {
         write_file "$WORK_DIR/com.rusty-fs.mounty.plist" "/Library/LaunchDaemons/com.rusty-fs.mounty.plist"
         sudo_run chown root:wheel "/Library/LaunchDaemons/com.rusty-fs.mounty.plist"
         sudo_run chmod 0644 "/Library/LaunchDaemons/com.rusty-fs.mounty.plist"
+        sudo_run chown "$MOUNTY_RUN_USER:$MOUNTY_RUN_GROUP" "$LOG_DIR"
     fi
 
     if [ "$NO_START" -eq 0 ]; then

@@ -32,11 +32,23 @@ Re-running the installer with different values updates the generated service
 files. Unless `--no-start` is used, the affected services are restarted so the
 new flags and environment variables take effect.
 
-When installing `mounty`, the installer also asks for `MOUNTY_UID` and
-`MOUNTY_GID`. These values control the UID/GID exposed by the mounted FUSE
-filesystem. The default is the user that invoked the installer
-(`SUDO_UID`/`SUDO_GID` when run through `sudo`, otherwise `id -u`/`id -g`).
-This avoids system daemons exposing the mount as `root:root` by default.
+When installing `mounty`, the installer asks which user/group should run the
+service. It defaults to the user that invoked the installer (`SUDO_USER` and the
+user's primary group when run through `sudo`, otherwise the current user).
+
+The installer then asks whether mounted files should be exposed as the same
+user/group. The default is yes. In that mode it resolves the selected user/group
+to `MOUNTY_UID` and `MOUNTY_GID` automatically.
+
+This matters because FUSE has two ownership layers:
+
+- the service user/group creates the mount and controls `findmnt`'s
+  `user_id`/`group_id`;
+- `MOUNTY_UID`/`MOUNTY_GID` control the UID/GID shown by `ls`/`stat` inside the
+  mounted filesystem.
+
+For normal desktop/dev usage these should match. Keeping them aligned avoids
+system daemons exposing or mounting the filesystem as `root:root` by default.
 
 Uninstall the installed services with:
 
@@ -130,8 +142,10 @@ If `mounty` connects to a remote `filer` instead of the local
 `filer.service`, edit the URL in `ExecStart` and remove `filer.service` from the
 `After=` line.
 
-If installing manually as a system service, set `MOUNTY_UID` and `MOUNTY_GID` in
-`mounty.service` to the user/group that should own files in the mounted view.
+If installing manually as a system service, set `User`/`Group` in
+`mounty.service` to the user/group that should create and access the FUSE mount.
+Set `MOUNTY_UID` and `MOUNTY_GID` to the matching numeric UID/GID unless you
+intentionally need different displayed ownership.
 
 ## macOS: launchd
 
@@ -156,9 +170,10 @@ sudo mkdir -p /usr/local/var/rusty-fs/data /usr/local/var/log/rusty-fs /Volumes/
 Install macFUSE before loading `mounty`. If `mounty` connects to a remote
 `filer`, edit the URL in `com.rusty-fs.mounty.plist`.
 
-If installing manually as a LaunchDaemon, set `MOUNTY_UID` and `MOUNTY_GID` in
-`com.rusty-fs.mounty.plist` to the user/group that should own files in the
-mounted view.
+If installing manually as a LaunchDaemon, set `UserName`/`GroupName` in
+`com.rusty-fs.mounty.plist` to the user/group that should create and access the
+FUSE mount. Set `MOUNTY_UID` and `MOUNTY_GID` to the matching numeric UID/GID
+unless you intentionally need different displayed ownership.
 
 Install the launch daemons:
 
