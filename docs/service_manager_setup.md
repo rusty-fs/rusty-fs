@@ -32,6 +32,12 @@ Re-running the installer with different values updates the generated service
 files. Unless `--no-start` is used, the affected services are restarted so the
 new flags and environment variables take effect.
 
+When installing `mounty`, the installer also asks for `MOUNTY_UID` and
+`MOUNTY_GID`. These values control the UID/GID exposed by the mounted FUSE
+filesystem. The default is the user that invoked the installer
+(`SUDO_UID`/`SUDO_GID` when run through `sudo`, otherwise `id -u`/`id -g`).
+This avoids system daemons exposing the mount as `root:root` by default.
+
 Uninstall the installed services with:
 
 ```bash
@@ -124,6 +130,9 @@ If `mounty` connects to a remote `filer` instead of the local
 `filer.service`, edit the URL in `ExecStart` and remove `filer.service` from the
 `After=` line.
 
+If installing manually as a system service, set `MOUNTY_UID` and `MOUNTY_GID` in
+`mounty.service` to the user/group that should own files in the mounted view.
+
 ## macOS: launchd
 
 Templates:
@@ -146,6 +155,10 @@ sudo mkdir -p /usr/local/var/rusty-fs/data /usr/local/var/log/rusty-fs /Volumes/
 
 Install macFUSE before loading `mounty`. If `mounty` connects to a remote
 `filer`, edit the URL in `com.rusty-fs.mounty.plist`.
+
+If installing manually as a LaunchDaemon, set `MOUNTY_UID` and `MOUNTY_GID` in
+`com.rusty-fs.mounty.plist` to the user/group that should own files in the
+mounted view.
 
 Install the launch daemons:
 

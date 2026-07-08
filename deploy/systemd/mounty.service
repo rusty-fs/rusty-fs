@@ -8,6 +8,9 @@ Type=simple
 Environment=RUST_LOG=info
 Environment=MOUNTY_CHUNK_SIZE=4194304
 Environment=MOUNTY_MAX_BUFFER_SIZE=8388608
+# Set these to the user/group that should own files in the mounted FUSE view.
+# Environment=MOUNTY_UID=1000
+# Environment=MOUNTY_GID=1000
 ExecStart=/usr/local/bin/mounty http://127.0.0.1:3000 /mnt/rusty-fs
 Restart=on-failure
 RestartSec=5

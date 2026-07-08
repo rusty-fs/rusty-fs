@@ -238,6 +238,8 @@ DEFAULT_SERVER_URL="http://127.0.0.1:${DEFAULT_PORT}"
 DEFAULT_RUST_LOG="info"
 DEFAULT_CHUNK_SIZE="4194304"
 DEFAULT_MAX_BUFFER_SIZE="8388608"
+DEFAULT_MOUNTY_UID="${SUDO_UID:-$(id -u)}"
+DEFAULT_MOUNTY_GID="${SUDO_GID:-$(id -g)}"
 
 echo "rusty-fs interactive installer"
 echo "Service manager: $manager"
@@ -255,6 +257,8 @@ SERVER_URL="$DEFAULT_SERVER_URL"
 MOUNTPOINT="$DEFAULT_MOUNTPOINT"
 CHUNK_SIZE="$DEFAULT_CHUNK_SIZE"
 MAX_BUFFER_SIZE="$DEFAULT_MAX_BUFFER_SIZE"
+MOUNTY_UID="$DEFAULT_MOUNTY_UID"
+MOUNTY_GID="$DEFAULT_MOUNTY_GID"
 
 if install_filer; then
     prompt BASE_DIR "filer BASE_DIR" "$DEFAULT_BASE_DIR"
@@ -272,6 +276,8 @@ prompt RUST_LOG_VALUE "RUST_LOG" "$DEFAULT_RUST_LOG"
 if install_mounty; then
     prompt CHUNK_SIZE "MOUNTY_CHUNK_SIZE" "$DEFAULT_CHUNK_SIZE"
     prompt MAX_BUFFER_SIZE "MOUNTY_MAX_BUFFER_SIZE" "$DEFAULT_MAX_BUFFER_SIZE"
+    prompt MOUNTY_UID "MOUNTY_UID exposed by FUSE" "$DEFAULT_MOUNTY_UID"
+    prompt MOUNTY_GID "MOUNTY_GID exposed by FUSE" "$DEFAULT_MOUNTY_GID"
 fi
 
 if [ "$manager" = "launchd" ]; then
@@ -297,6 +303,8 @@ echo "  RUST_LOG:       $RUST_LOG_VALUE"
 if install_mounty; then
     echo "  chunk size:     $CHUNK_SIZE"
     echo "  max buffer:     $MAX_BUFFER_SIZE"
+    echo "  mounty UID:     $MOUNTY_UID"
+    echo "  mounty GID:     $MOUNTY_GID"
 fi
 if [ "$manager" = "launchd" ]; then
     echo "  log dir:        $LOG_DIR"
@@ -393,6 +401,8 @@ Type=simple
 Environment=RUST_LOG=$RUST_LOG_VALUE
 Environment=MOUNTY_CHUNK_SIZE=$CHUNK_SIZE
 Environment=MOUNTY_MAX_BUFFER_SIZE=$MAX_BUFFER_SIZE
+Environment=MOUNTY_UID=$MOUNTY_UID
+Environment=MOUNTY_GID=$MOUNTY_GID
 ExecStart=$BIN_DIR/mounty $SERVER_URL $MOUNTPOINT
 Restart=on-failure
 RestartSec=5
@@ -418,7 +428,7 @@ xml_escape() {
 
 generate_launchd_files() {
     local bin_dir_xml base_dir_xml port_xml server_url_xml mountpoint_xml rust_log_xml
-    local chunk_xml max_buffer_xml log_dir_xml
+    local chunk_xml max_buffer_xml log_dir_xml uid_xml gid_xml
     bin_dir_xml="$(xml_escape "$BIN_DIR")"
     base_dir_xml="$(xml_escape "$BASE_DIR")"
     port_xml="$(xml_escape "$FILER_PORT")"
@@ -428,6 +438,8 @@ generate_launchd_files() {
     chunk_xml="$(xml_escape "$CHUNK_SIZE")"
     max_buffer_xml="$(xml_escape "$MAX_BUFFER_SIZE")"
     log_dir_xml="$(xml_escape "$LOG_DIR")"
+    uid_xml="$(xml_escape "$MOUNTY_UID")"
+    gid_xml="$(xml_escape "$MOUNTY_GID")"
 
     if install_filer; then
         cat > "$WORK_DIR/com.rusty-fs.filer.plist" <<EOF
@@ -492,6 +504,10 @@ EOF
     <string>$chunk_xml</string>
     <key>MOUNTY_MAX_BUFFER_SIZE</key>
     <string>$max_buffer_xml</string>
+    <key>MOUNTY_UID</key>
+    <string>$uid_xml</string>
+    <key>MOUNTY_GID</key>
+    <string>$gid_xml</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

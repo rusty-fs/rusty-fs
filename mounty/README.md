@@ -30,6 +30,18 @@ For background operation, run `mounty` as a foreground process managed by the
 platform service manager. See `docs/service_manager_setup.md` for systemd and
 launchd templates.
 
+### Ownership
+
+`mounty` exposes file ownership through FUSE attributes. By default it uses the
+UID/GID of the running process. When running as a system daemon, set:
+
+```bash
+MOUNTY_UID=<uid>
+MOUNTY_GID=<gid>
+```
+
+to make the mounted filesystem appear owned by the intended user.
+
 ## Dependencies
 
 - `fuser` - FUSE bindings for Rust
