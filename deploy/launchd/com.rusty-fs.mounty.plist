@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.rusty-fs.mounty</string>
+
+  <!--
+  Run mounty as the user that should create and access the FUSE mount.
+  Uncomment and adjust these values for your deployment.
+  <key>UserName</key>
+  <string>matteo</string>
+  <key>GroupName</key>
+  <string>staff</string>
+  -->
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/mounty</string>
+    <string>http://127.0.0.1:3000</string>
+    <string>/Volumes/rusty-fs</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>RUST_LOG</key>
+    <string>info</string>
+    <key>MOUNTY_CHUNK_SIZE</key>
+    <string>4194304</string>
+    <key>MOUNTY_MAX_BUFFER_SIZE</key>
+    <string>8388608</string>
+    <!-- Set these to the UID/GID that should own files in the mounted FUSE view. -->
+    <!--
+    <key>MOUNTY_UID</key>
+    <string>501</string>
+    <key>MOUNTY_GID</key>
+    <string>20</string>
+    -->
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ExitTimeOut</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/usr/local/var/log/rusty-fs/mounty.log</string>
+  <key>StandardErrorPath</key>
+  <string>/usr/local/var/log/rusty-fs/mounty.err.log</string>
+</dict>
+</plist>

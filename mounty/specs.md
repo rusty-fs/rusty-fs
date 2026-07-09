@@ -12,7 +12,8 @@ mounty is a Rust-based FUSE client that mounts a remote file system, exposing it
 - Write files to the remote server.
 - Support creation, deletion, and renaming of files and directories.
 - Maintain file attributes (size, timestamps, permissions) as feasible.
-- Operate as a background daemon, handling filesystem operations continuously.
+- Operate as a long-running service process, suitable for management by
+  platform service managers such as systemd on Linux and launchd on macOS.
 
 ### 2.2 Server Communication
 - Interact with the remote server using the following RESTful API endpoints:

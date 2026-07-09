@@ -13,6 +13,10 @@ pub struct FuseConfig {
     pub listing_cache_ttl: Duration,
     /// Directory listing cache capacity (LRU)
     pub listing_cache_capacity: usize,
+    /// UID exposed in FUSE file attributes.
+    pub owner_uid: u32,
+    /// GID exposed in FUSE file attributes.
+    pub owner_gid: u32,
 }
 
 impl FuseConfig {
@@ -48,12 +52,24 @@ impl FuseConfig {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(1024);
 
+        let owner_uid = std::env::var("MOUNTY_UID")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or_else(current_uid);
+
+        let owner_gid = std::env::var("MOUNTY_GID")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or_else(current_gid);
+
         Self {
             ttl: Duration::from_secs(ttl_secs),
             max_buffer_size,
             chunk_size,
             listing_cache_ttl: Duration::from_millis(listing_cache_ttl_ms),
             listing_cache_capacity,
+            owner_uid,
+            owner_gid,
         }
     }
 
@@ -86,6 +102,13 @@ impl FuseConfig {
         self.listing_cache_capacity = cap;
         self
     }
+
+    /// Set the UID/GID exposed by FUSE attributes.
+    pub fn with_owner(mut self, uid: u32, gid: u32) -> Self {
+        self.owner_uid = uid;
+        self.owner_gid = gid;
+        self
+    }
 }
 
 impl Default for FuseConfig {
@@ -96,8 +119,18 @@ impl Default for FuseConfig {
             chunk_size: 4 * 1024 * 1024,      // 4 MB
             listing_cache_ttl: Duration::from_millis(500),
             listing_cache_capacity: 1024,
+            owner_uid: current_uid(),
+            owner_gid: current_gid(),
         }
     }
+}
+
+fn current_uid() -> u32 {
+    unsafe { libc::getuid() as u32 }
+}
+
+fn current_gid() -> u32 {
+    unsafe { libc::getgid() as u32 }
 }
 
 #[cfg(test)]
@@ -110,6 +143,8 @@ mod tests {
         assert_eq!(config.ttl, Duration::from_secs(1));
         assert_eq!(config.max_buffer_size, 8 * 1024 * 1024);
         assert_eq!(config.chunk_size, 4 * 1024 * 1024);
+        assert_eq!(config.owner_uid, current_uid());
+        assert_eq!(config.owner_gid, current_gid());
     }
 
     #[test]
@@ -121,5 +156,13 @@ mod tests {
         assert_eq!(config.ttl, Duration::from_secs(5));
         assert_eq!(config.max_buffer_size, 2 * 1024 * 1024);
         assert_eq!(config.chunk_size, 4 * 1024 * 1024); // unchanged
+    }
+
+    #[test]
+    fn test_owner_builder() {
+        let config = FuseConfig::new().with_owner(123, 456);
+
+        assert_eq!(config.owner_uid, 123);
+        assert_eq!(config.owner_gid, 456);
     }
 }

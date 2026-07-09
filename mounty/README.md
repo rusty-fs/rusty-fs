@@ -21,9 +21,29 @@ cargo run <server_url> <mountpoint>
 # Mount remote filesystem from server to local directory
 cargo run http://localhost:3000 /mnt/remote
 
-# Unmount (from another terminal)
-fusermount -u /mnt/remote
+# Stop normally from another terminal.
+# mounty handles SIGINT/SIGTERM and unmounts the FUSE session.
+kill -TERM <mounty-pid>
 ```
+
+For background operation, run `mounty` as a foreground process managed by the
+platform service manager. See `docs/service_manager_setup.md` for systemd and
+launchd templates.
+
+### Ownership
+
+`mounty` exposes file ownership through FUSE attributes. By default it uses the
+UID/GID of the running process. When running as a system daemon, run the service
+as the user that should access the mount and set matching ownership:
+
+```bash
+MOUNTY_UID=<uid>
+MOUNTY_GID=<gid>
+```
+
+For systemd this means `User=`/`Group=` plus `MOUNTY_UID`/`MOUNTY_GID`. For
+launchd LaunchDaemons this means `UserName`/`GroupName` plus
+`MOUNTY_UID`/`MOUNTY_GID`.
 
 ## Dependencies
 

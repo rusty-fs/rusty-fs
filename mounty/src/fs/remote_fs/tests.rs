@@ -35,11 +35,12 @@ mod tests {
 
     #[test]
     fn test_file_entry_to_attr_values() {
+        use crate::fs::config::FuseConfig;
         use crate::fs::http::FileEntry;
         use fuser::FileType;
 
         let backend = Arc::new(FakeBackend::new());
-        let fs = RemoteFileSystem::new(backend);
+        let fs = RemoteFileSystem::with_config(backend, FuseConfig::default().with_owner(123, 456));
 
         let entry_file = FileEntry {
             name: "f.txt".into(),
@@ -58,6 +59,8 @@ mod tests {
         assert_eq!(attr.size, 1234);
         assert_eq!(attr.kind, FileType::RegularFile);
         assert_eq!(attr.perm, 0o644);
+        assert_eq!(attr.uid, 123);
+        assert_eq!(attr.gid, 456);
 
         let entry_dir = FileEntry {
             name: "d".into(),

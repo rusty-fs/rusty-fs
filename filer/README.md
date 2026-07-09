@@ -46,4 +46,10 @@ Returns JSON with file listing including:
 
 - `BASE_DIR` - Required. The root directory to serve files from.
 
+## Service Managers
+
+For background operation, run `filer` as a foreground process managed by the
+platform service manager. See `docs/service_manager_setup.md` for systemd and
+launchd templates.
+
 ## License
