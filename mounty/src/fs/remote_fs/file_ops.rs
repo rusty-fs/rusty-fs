@@ -366,7 +366,7 @@ impl RemoteFileSystem {
         let offset = state.write_buf_offset;
         let buf_len = buf.len();
 
-        tracing::info!(
+        tracing::debug!(
             "[DIAG] flush_write_buffer: path={} offset={} size={}",
             path,
             offset,
@@ -395,7 +395,7 @@ impl RemoteFileSystem {
             return Err(e);
         }
 
-        tracing::info!(
+        tracing::debug!(
             "[DIAG] flush_write_buffer OK: path={} offset={} size={}",
             path,
             offset,
