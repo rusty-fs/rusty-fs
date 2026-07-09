@@ -34,7 +34,7 @@ Run the script from the project root.
 ./test/run_perf_tests.sh --packet-loss 5
 ```
 
-Using `--bw-limit` or `--packet-loss` on macOS uses `dnctl` and `pfctl`, which can prompt for your `sudo` password to temporarily configure firewall rules. On Linux it uses `tc`. The script removes the shaping rules during cleanup.
+Using `--bw-limit` or `--packet-loss` on macOS uses `dnctl` and `pfctl`, which can prompt for your `sudo` password to temporarily configure firewall rules. On Linux it uses `tc`.
 
 ## CI Policy
 

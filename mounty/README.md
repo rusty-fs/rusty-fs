@@ -48,6 +48,17 @@ All optional, read from the environment at startup:
 | `MOUNTY_UID` / `MOUNTY_GID` | current user | UID/GID exposed on mounted files. |
 | `MOUNTY_IOSIZE` | `1048576` | macOS-only FUSE I/O size hint. |
 
+### Caching
+
+`mounty` uses five independent caches/buffers — two per open file handle
+(read-ahead, write buffer), three shared across the whole mount (listing,
+metadata, negative lookup):
+
+![mounty caching architecture](../docs/mounty_caching_architecture.svg)
+
+See [`docs/mounty_caching_explained.md`](../docs/mounty_caching_explained.md)
+for a plain-language walkthrough of each one.
+
 ### Ownership
 
 `mounty` exposes file ownership through FUSE attributes. By default it uses the
