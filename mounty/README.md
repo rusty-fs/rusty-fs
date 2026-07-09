@@ -56,9 +56,6 @@ metadata, negative lookup):
 
 ![mounty caching architecture](../docs/mounty_caching_architecture.svg)
 
-See [`docs/mounty_caching_explained.md`](../docs/mounty_caching_explained.md)
-for a plain-language walkthrough of each one.
-
 ### Ownership
 
 `mounty` exposes file ownership through FUSE attributes. By default it uses the
