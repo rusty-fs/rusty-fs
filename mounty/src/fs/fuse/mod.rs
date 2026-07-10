@@ -29,8 +29,8 @@ fn xattr_not_found_errno() -> i32 {
 
 impl Filesystem for RemoteFileSystem {
     fn init(&mut self, _req: &Request<'_>, config: &mut KernelConfig) -> Result<(), libc::c_int> {
-        let desired_write = self.config.max_buffer_size.min(16 * 1024 * 1024) as u32;
-        let desired_readahead = self.config.chunk_size.min(16 * 1024 * 1024) as u32;
+        let desired_write = self.config.chunk_size.min(16 * 1024 * 1024) as u32;
+        let desired_readahead = self.config.max_buffer_size.min(16 * 1024 * 1024) as u32;
 
         let negotiated_write = config
             .set_max_write(desired_write)

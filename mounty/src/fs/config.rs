@@ -5,9 +5,9 @@ use std::time::Duration;
 pub struct FuseConfig {
     /// TTL for attribute cache
     pub ttl: Duration,
-    /// Maximum buffer size before flushing to server (in bytes)
+    /// Read-ahead buffer size (in bytes)
     pub max_buffer_size: usize,
-    /// Read chunk size for partial reads (in bytes)
+    /// Write chunk size sent to the server (in bytes)
     pub chunk_size: usize,
     /// Directory listing cache TTL
     pub listing_cache_ttl: Duration,
