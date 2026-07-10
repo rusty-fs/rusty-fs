@@ -125,18 +125,27 @@ fn install_shutdown_unmounter(
             let signal = wait_for_shutdown_signal().await;
             info!("Received {}, starting graceful filesystem unmount", signal);
 
+            #[cfg(target_os = "linux")]
             {
                 let forced_shutdown = forced_shutdown.clone();
                 let mountpoint = mountpoint.clone();
                 tokio::spawn(async move {
                     let signal = wait_for_shutdown_signal().await;
-                    warn!(
-                        "Received {} during graceful shutdown; forcing unmount of {} and exiting",
-                        signal,
-                        mountpoint.display()
-                    );
                     forced_shutdown.store(true, Ordering::SeqCst);
-                    force_unmount(&mountpoint);
+                    if is_mount_active(&mountpoint) {
+                        warn!(
+                            "Received {} during graceful shutdown; forcing unmount of {} and exiting",
+                            signal,
+                            mountpoint.display()
+                        );
+                        force_unmount(&mountpoint);
+                    } else {
+                        warn!(
+                            "Received {} during graceful shutdown; {} is already unmounted, exiting",
+                            signal,
+                            mountpoint.display()
+                        );
+                    }
                     std::process::exit(130);
                 });
             }
@@ -179,7 +188,21 @@ fn install_shutdown_unmounter(
                     );
                 }
 
+                #[cfg(target_os = "linux")]
+                tokio::time::sleep(Duration::from_millis(500)).await;
+
+                #[cfg(not(target_os = "linux"))]
                 tokio::select! {
+                    signal = wait_for_shutdown_signal() => {
+                        warn!(
+                            "Received {} during graceful shutdown; forcing unmount of {} and exiting",
+                            signal,
+                            mountpoint.display()
+                        );
+                        forced_shutdown.store(true, Ordering::SeqCst);
+                        force_unmount(&mountpoint);
+                        std::process::exit(130);
+                    }
                     _ = tokio::time::sleep(Duration::from_millis(500)) => {}
                 }
             }
