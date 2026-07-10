@@ -57,7 +57,10 @@ pub fn send_sigterm(child: &Child) {
 
 pub fn build_filer() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let filer_dir = manifest_dir.parent().expect("workspace parent").join("filer");
+    let filer_dir = manifest_dir
+        .parent()
+        .expect("workspace parent")
+        .join("filer");
 
     let status = Command::new("cargo")
         .arg("build")
@@ -91,7 +94,10 @@ impl FilerProcess {
             .spawn()
             .expect("start filer");
 
-        assert!(wait_for_tcp(port, Duration::from_secs(5)), "filer did not start");
+        assert!(
+            wait_for_tcp(port, Duration::from_secs(5)),
+            "filer did not start"
+        );
 
         Self {
             child,

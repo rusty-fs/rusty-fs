@@ -20,7 +20,8 @@ fn sigterm_unmounts_and_persists_file_data() {
     file.write_all(b"hello before shutdown")
         .expect("write before shutdown");
     file.seek(SeekFrom::Start(6)).expect("seek before shutdown");
-    file.write_all(b"after!").expect("overwrite before shutdown");
+    file.write_all(b"after!")
+        .expect("overwrite before shutdown");
     drop(file);
 
     common::send_sigterm(&mounty.child);
@@ -32,8 +33,8 @@ fn sigterm_unmounts_and_persists_file_data() {
         "mountpoint should be unmounted after SIGTERM"
     );
 
-    let persisted = fs::read(filer.base_dir.path().join("open-write.txt"))
-        .expect("read persisted server file");
+    let persisted =
+        fs::read(filer.base_dir.path().join("open-write.txt")).expect("read persisted server file");
     assert_eq!(persisted, b"hello after! shutdown");
 
     common::send_sigterm(&filer.child);
@@ -49,7 +50,10 @@ fn external_unmount_makes_mounty_exit_and_persist_data() {
     let mounted_path = mounty.mount_dir.path().join("external-unmount.txt");
     fs::write(&mounted_path, b"persist me").expect("write through mount");
 
-    assert!(common::unmount(mounty.mount_dir.path()), "external unmount failed");
+    assert!(
+        common::unmount(mounty.mount_dir.path()),
+        "external unmount failed"
+    );
     let status = common::wait_for_exit(&mut mounty.child, Duration::from_secs(15))
         .expect("mounty should exit after external unmount");
     assert!(status.success(), "mounty exited with {status}");

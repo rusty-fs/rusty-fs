@@ -23,7 +23,10 @@ impl TestServer {
             .spawn()
             .unwrap();
 
-        assert!(wait_for_tcp(port, Duration::from_secs(5)), "server did not start");
+        assert!(
+            wait_for_tcp(port, Duration::from_secs(5)),
+            "server did not start"
+        );
         Self { child, dir, port }
     }
 
@@ -124,11 +127,7 @@ async fn test_list_directory() {
         .await
         .unwrap();
 
-    let resp = client
-        .get(server.url("/list/nested"))
-        .send()
-        .await
-        .unwrap();
+    let resp = client.get(server.url("/list/nested")).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
     let json: serde_json::Value = resp.json().await.unwrap();
@@ -219,11 +218,7 @@ async fn test_get_meta_for_file_and_directory() {
     let server = TestServer::start();
     let client = reqwest::Client::new();
 
-    client
-        .post(server.url("/mkdir/docs"))
-        .send()
-        .await
-        .unwrap();
+    client.post(server.url("/mkdir/docs")).send().await.unwrap();
     client
         .put(server.url("/files/docs/readme.txt"))
         .body("metadata")
@@ -311,10 +306,7 @@ async fn test_get_file_range_variants() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
-    assert_eq!(
-        resp.headers().get(CONTENT_RANGE).unwrap(),
-        "bytes 2-5/10"
-    );
+    assert_eq!(resp.headers().get(CONTENT_RANGE).unwrap(), "bytes 2-5/10");
     assert_eq!(resp.text().await.unwrap(), "2345");
 
     let resp = client
