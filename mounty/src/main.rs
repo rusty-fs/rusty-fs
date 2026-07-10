@@ -6,7 +6,7 @@ use fs::HttpClient;
 use fs::RemoteFileSystem;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -125,42 +125,29 @@ fn install_shutdown_unmounter(
             let signal = wait_for_shutdown_signal().await;
             info!("Received {}, starting graceful filesystem unmount", signal);
 
-            let additional_shutdown_signals = Arc::new(AtomicUsize::new(0));
-            let shutdown_notify = Arc::new(tokio::sync::Notify::new());
             {
-                let additional_shutdown_signals = additional_shutdown_signals.clone();
-                let shutdown_notify = shutdown_notify.clone();
+                let forced_shutdown = forced_shutdown.clone();
+                let mountpoint = mountpoint.clone();
                 tokio::spawn(async move {
-                    loop {
-                        let signal = wait_for_shutdown_signal().await;
-                        additional_shutdown_signals.fetch_add(1, Ordering::SeqCst);
-                        warn!(
-                            "Received {} during graceful shutdown; forcing unmount at next safe point",
-                            signal
-                        );
-                        shutdown_notify.notify_waiters();
-                    }
+                    let signal = wait_for_shutdown_signal().await;
+                    warn!(
+                        "Received {} during graceful shutdown; forcing unmount of {} and exiting",
+                        signal,
+                        mountpoint.display()
+                    );
+                    forced_shutdown.store(true, Ordering::SeqCst);
+                    force_unmount(&mountpoint);
+                    std::process::exit(130);
                 });
             }
 
             let mut attempts = 0usize;
 
             loop {
-                force_if_additional_shutdown_signal(
-                    &additional_shutdown_signals,
-                    &forced_shutdown,
-                    &mountpoint,
-                );
-
                 attempts += 1;
                 match unmounter.unmount() {
                     Ok(()) => {
                         tokio::time::sleep(Duration::from_millis(200)).await;
-                        force_if_additional_shutdown_signal(
-                            &additional_shutdown_signals,
-                            &forced_shutdown,
-                            &mountpoint,
-                        );
                         if !is_mount_active(&mountpoint) {
                             info!("Graceful filesystem unmount completed");
                             return;
@@ -178,17 +165,7 @@ fn install_shutdown_unmounter(
                 }
 
                 request_platform_unmount(&mountpoint);
-                force_if_additional_shutdown_signal(
-                    &additional_shutdown_signals,
-                    &forced_shutdown,
-                    &mountpoint,
-                );
                 tokio::time::sleep(Duration::from_millis(200)).await;
-                force_if_additional_shutdown_signal(
-                    &additional_shutdown_signals,
-                    &forced_shutdown,
-                    &mountpoint,
-                );
                 if !is_mount_active(&mountpoint) {
                     info!("Graceful filesystem unmount completed");
                     return;
@@ -203,30 +180,11 @@ fn install_shutdown_unmounter(
                 }
 
                 tokio::select! {
-                    _ = shutdown_notify.notified() => {}
                     _ = tokio::time::sleep(Duration::from_millis(500)) => {}
                 }
             }
         });
     });
-}
-
-fn force_if_additional_shutdown_signal(
-    additional_shutdown_signals: &AtomicUsize,
-    forced_shutdown: &AtomicBool,
-    mountpoint: &Path,
-) {
-    if additional_shutdown_signals.load(Ordering::SeqCst) == 0 {
-        return;
-    }
-
-    warn!(
-        "Forcing unmount of {} after additional shutdown signal",
-        mountpoint.display()
-    );
-    forced_shutdown.store(true, Ordering::SeqCst);
-    force_unmount(mountpoint);
-    std::process::exit(130);
 }
 
 fn request_platform_unmount(mountpoint: &Path) {
