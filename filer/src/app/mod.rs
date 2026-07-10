@@ -20,7 +20,7 @@ pub fn build_app(shared_base_dir: Arc<String>) -> Router {
         .route("/files/{*file_path}", delete(delete_path))
         .route("/files/{*file_path}", put(put_file))
         .layer(Extension(shared_base_dir))
-        .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB limit
+        .layer(DefaultBodyLimit::disable())
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(trace::DefaultMakeSpan::new().level(Level::TRACE))

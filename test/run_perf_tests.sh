@@ -2,11 +2,23 @@
 set -e
 
 # Configuration
-MOUNT_DIR="/tmp/mounty-test-mnt"
+free_port() {
+    python3 - <<'PY'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+}
+
+MOUNT_DIR="${MOUNT_DIR:-$(mktemp -d /tmp/mounty-test-mnt.XXXXXX)}"
+BASE_DIR="${BASE_DIR:-$(mktemp -d /tmp/filer-base-dir.XXXXXX)}"
+SOURCE_FILE="${SOURCE_FILE:-$(mktemp /tmp/mounty-test-source.XXXXXX)}"
 TEST_FILE_SIZE_MB=1024
 EXPECTED_THRESHOLD_PERCENT="${EXPECTED_THRESHOLD_PERCENT:-75}"
-FILER_PORT=3000
-SERVER_URL="http://localhost:${FILER_PORT}"
+FILER_PORT="${FILER_PORT:-$(free_port)}"
+IPERF_PORT="${IPERF_PORT:-$(free_port)}"
+SERVER_URL="http://127.0.0.1:${FILER_PORT}"
 
 # Variables
 BW_LIMIT=""
@@ -15,6 +27,32 @@ OS_TYPE=$(uname -s)
 FILER_PID=""
 MOUNTY_PID=""
 IPERF_SERVER_PID=""
+
+wait_for_http() {
+    local deadline=$((SECONDS + 10))
+    while (( SECONDS < deadline )); do
+        if curl -fsS "$SERVER_URL/list" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "[!] ERROR: Filer did not become ready."
+    return 1
+}
+
+wait_for_mount() {
+    local deadline=$((SECONDS + 15))
+    local canonical_mount_dir
+    canonical_mount_dir=$(cd "$MOUNT_DIR" && pwd -P)
+    while (( SECONDS < deadline )); do
+        if mount | grep -Fq "$MOUNT_DIR" || mount | grep -Fq "$canonical_mount_dir"; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "[!] ERROR: FUSE mount was not successfully created at $MOUNT_DIR."
+    return 1
+}
 
 # Help function
 print_usage() {
@@ -48,16 +86,18 @@ cleanup() {
     # Unmount mounty
     if [ -n "$MOUNTY_PID" ]; then
         if [ "$OS_TYPE" = "Linux" ]; then
-            fusermount -u "$MOUNT_DIR" 2>/dev/null || true
+            fusermount3 -u "$MOUNT_DIR" 2>/dev/null || fusermount -u "$MOUNT_DIR" 2>/dev/null || umount "$MOUNT_DIR" 2>/dev/null || true
         else
-            umount "$MOUNT_DIR" 2>/dev/null || true
+            umount "$MOUNT_DIR" 2>/dev/null || diskutil unmount "$MOUNT_DIR" >/dev/null 2>&1 || true
         fi
         kill "$MOUNTY_PID" 2>/dev/null || true
+        wait "$MOUNTY_PID" 2>/dev/null || true
     fi
 
     # Kill filer
     if [ -n "$FILER_PID" ]; then
         kill "$FILER_PID" 2>/dev/null || true
+        wait "$FILER_PID" 2>/dev/null || true
     fi
 
     # Remove network limits
@@ -73,9 +113,9 @@ cleanup() {
     fi
 
     # Clean test files
-    rm -f /tmp/mounty_test_source.dat
+    rm -f "$SOURCE_FILE"
     rm -rf "$MOUNT_DIR"
-    rm -rf "/tmp/filer_base_dir"
+    rm -rf "$BASE_DIR"
     
     echo "[*] Cleanup complete."
 }
@@ -97,7 +137,7 @@ if [ -n "$BW_LIMIT" ] || [ -n "$PACKET_LOSS" ]; then
         sudo dnctl $DNCTL_CONFIG
         (
             echo "dummynet out quick proto tcp to 127.0.0.1 port $FILER_PORT pipe 1"
-            echo "dummynet out quick proto tcp to 127.0.0.1 port 5201 pipe 1"
+            echo "dummynet out quick proto tcp to 127.0.0.1 port $IPERF_PORT pipe 1"
         ) | sudo pfctl -f -
         sudo pfctl -e 2>/dev/null || true
     elif [ "$OS_TYPE" = "Linux" ]; then
@@ -131,11 +171,10 @@ fi
 
 # Start filer
 echo "[*] Starting filer server on port $FILER_PORT..."
-export BASE_DIR="/tmp/filer_base_dir"
 mkdir -p "$BASE_DIR"
-./filer/target/release/remote-fs-server --port $FILER_PORT &
+BASE_DIR="$BASE_DIR" ./filer/target/release/remote-fs-server --port $FILER_PORT &
 FILER_PID=$!
-sleep 2 # Wait for server to start
+wait_for_http
 
 if ! kill -0 $FILER_PID 2>/dev/null; then
     echo "[!] ERROR: Filer failed to start or crashed immediately."
@@ -147,26 +186,21 @@ echo "[*] Creating mountpoint $MOUNT_DIR and starting mounty..."
 mkdir -p "$MOUNT_DIR"
 ./mounty/target/release/mounty "$SERVER_URL" "$MOUNT_DIR" &
 MOUNTY_PID=$!
-sleep 3 # Wait for mount to be ready
+wait_for_mount
 
 if ! kill -0 $MOUNTY_PID 2>/dev/null; then
     echo "[!] ERROR: Mounty failed to start or crashed immediately."
     exit 1
 fi
 
-if ! mount | grep -q "$MOUNT_DIR"; then
-    echo "[!] ERROR: FUSE mount was not successfully created at $MOUNT_DIR."
-    exit 1
-fi
-
 # iperf3 baseline test
 echo "[*] Running iperf3 baseline test..."
-iperf3 -s -p 5201 &
+iperf3 -s -p "$IPERF_PORT" &
 IPERF_SERVER_PID=$!
 sleep 1
 
 # Run iperf3 client and parse Mbit/s (using grep and awk safely)
-IPERF_OUT=$(iperf3 -c 127.0.0.1 -p 5201 -t 5 -f m)
+IPERF_OUT=$(iperf3 -c 127.0.0.1 -p "$IPERF_PORT" -t 5 -f m)
 echo "$IPERF_OUT"
 # Extract the receiver Mbit/s speed
 BASELINE_MBITS=$(echo "$IPERF_OUT" | grep sender | awk '{print $7}')
@@ -179,23 +213,23 @@ echo "[*] Baseline Network Speed: $BASELINE_MBITS Mbit/s"
 # Generate test payload
 echo "[*] Generating ${TEST_FILE_SIZE_MB}MB test payload..."
 if [ "$OS_TYPE" = "Darwin" ]; then
-    mkfile "${TEST_FILE_SIZE_MB}m" /tmp/mounty_test_source.dat
+    mkfile "${TEST_FILE_SIZE_MB}m" "$SOURCE_FILE"
 else
-    dd if=/dev/urandom of=/tmp/mounty_test_source.dat bs=1M count="$TEST_FILE_SIZE_MB" status=none
+    dd if=/dev/urandom of="$SOURCE_FILE" bs=1M count="$TEST_FILE_SIZE_MB" status=none
 fi
 
 # Calculate Original Checksum
 echo "[*] Calculating SHA256 of original file..."
 if command -v sha256sum >/dev/null 2>&1; then
-    ORIGINAL_HASH=$(sha256sum /tmp/mounty_test_source.dat | awk '{print $1}')
+    ORIGINAL_HASH=$(sha256sum "$SOURCE_FILE" | awk '{print $1}')
 else
-    ORIGINAL_HASH=$(shasum -a 256 /tmp/mounty_test_source.dat | awk '{print $1}')
+    ORIGINAL_HASH=$(shasum -a 256 "$SOURCE_FILE" | awk '{print $1}')
 fi
 
 # Perform file copy test
 echo "[*] Copying file to mounty mountpoint..."
 START_TIME=$(date +%s%N)
-dd if=/tmp/mounty_test_source.dat of="$MOUNT_DIR/mounty_test_dest.dat" bs=1M status=none
+dd if="$SOURCE_FILE" of="$MOUNT_DIR/mounty_test_dest.dat" bs=1M status=none
 END_TIME=$(date +%s%N)
 
 # Calculate duration and speed

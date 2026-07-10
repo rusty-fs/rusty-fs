@@ -48,8 +48,8 @@ impl FhManager {
         Self {
             next_fh: 1,
             fh_map: HashMap::new(),
-            read_buf_cap: 4 * 1024 * 1024, // 4 MB default
-            write_buf_cap: 1024 * 1024,    // 1 MB default
+            read_buf_cap: 8 * 1024 * 1024,  // 8 MB default
+            write_buf_cap: 4 * 1024 * 1024, // 4 MB default
         }
     }
 
@@ -155,6 +155,15 @@ mod tests {
         assert_ne!(fh1, fh2);
         assert_eq!(fh1, 1);
         assert_eq!(fh2, 2);
+    }
+
+    #[test]
+    fn test_default_buffer_sizes() {
+        let mut manager = FhManager::new();
+        let fh = manager.alloc_fh(0, 0);
+        let state = manager.get_fh_state_ref(fh).unwrap();
+        assert_eq!(state.read_buf_cap, 8 * 1024 * 1024);
+        assert_eq!(state.write_buf_cap, 4 * 1024 * 1024);
     }
 
     #[test]

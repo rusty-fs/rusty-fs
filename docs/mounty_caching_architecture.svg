@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 700" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.14"/>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="1300" height="700" fill="#ffffff"/>
+  <text x="650" y="32" text-anchor="middle" font-size="20" font-weight="bold" fill="#0f172a">mounty — Client-Side Caching Architecture</text>
+  <text x="650" y="52" text-anchor="middle" font-size="12" fill="#64748b">Five independent caches/buffers, each with its own scope, key, and eviction policy</text>
+
+  <!-- mounty container -->
+  <rect x="40" y="80" width="860" height="500" rx="14" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2" filter="url(#shadow)"/>
+  <text x="60" y="108" font-size="15" font-weight="bold" fill="#0f172a">mounty (FUSE client)</text>
+
+  <text x="60" y="138" font-size="12" font-style="italic" fill="#475569">Per file handle — FhState (allocated in open(), freed in release())</text>
+
+  <!-- Card 1: Read-ahead buffer -->
+  <rect x="70" y="150" width="395" height="185" rx="10" fill="#f0fdfa" stroke="#5eead4" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="70" y="150" width="395" height="6" rx="3" fill="#0d9488"/>
+  <text x="84" y="180" font-size="13.5" font-weight="bold" fill="#0f766e">Read-ahead buffer</text>
+  <text x="84" y="202" font-size="10.5" fill="#334155">Scope: per open file handle</text>
+  <text x="84" y="218" font-size="10.5" fill="#334155">Key: none — one buffer per fh</text>
+  <text x="84" y="234" font-size="10.5" fill="#334155">Size: 8 MB (MOUNTY_MAX_BUFFER_SIZE)</text>
+  <text x="84" y="250" font-size="10.5" fill="#334155">Populated by: read(), aligned fetch</text>
+  <text x="84" y="266" font-size="10.5" fill="#334155">Evicted: overwritten on next miss</text>
+  <text x="84" y="282" font-size="10.5" fill="#334155">Freed: on release()</text>
+  <text x="84" y="304" font-size="11" font-weight="bold" fill="#0f766e">On miss → GET /files (Range)</text>
+
+  <!-- Card 2: Write buffer -->
+  <rect x="485" y="150" width="395" height="185" rx="10" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="485" y="150" width="395" height="6" rx="3" fill="#ea580c"/>
+  <text x="499" y="180" font-size="13.5" font-weight="bold" fill="#c2410c">Write buffer</text>
+  <text x="499" y="202" font-size="10.5" fill="#334155">Scope: per open file handle</text>
+  <text x="499" y="218" font-size="10.5" fill="#334155">Key: none — one buffer per fh</text>
+  <text x="499" y="234" font-size="10.5" fill="#334155">Size: 4 MB (MOUNTY_CHUNK_SIZE)</text>
+  <text x="499" y="250" font-size="10.5" fill="#334155">Populated by: write(), accumulates</text>
+  <text x="499" y="266" font-size="10.5" fill="#334155">Flushed: full, release(), or shutdown</text>
+  <text x="499" y="282" font-size="10.5" fill="#334155">Not a read cache — one-way, outgoing</text>
+  <text x="499" y="304" font-size="11" font-weight="bold" fill="#c2410c">Flush → PUT /files (Content-Range)</text>
+
+  <text x="60" y="360" font-size="12" font-style="italic" fill="#475569">Shared across the whole mount — RemoteFileSystem</text>
+
+  <!-- Card 3: Listing cache -->
+  <rect x="70" y="372" width="256" height="185" rx="10" fill="#eef2ff" stroke="#a5b4fc" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="70" y="372" width="256" height="6" rx="3" fill="#4f46e5"/>
+  <text x="84" y="402" font-size="13.5" font-weight="bold" fill="#4338ca">Listing cache</text>
+  <text x="84" y="424" font-size="10.5" fill="#334155">Scope: shared (whole mount)</text>
+  <text x="84" y="440" font-size="10.5" fill="#334155">Key: directory path</text>
+  <text x="84" y="456" font-size="10.5" fill="#334155">Populated by: readdir()</text>
+  <text x="84" y="472" font-size="10.5" fill="#334155">TTL: 500ms, max 1024 (LRU)</text>
+  <text x="84" y="488" font-size="10.5" fill="#334155">Invalidated: dir mutations</text>
+  <text x="84" y="510" font-size="11" font-weight="bold" fill="#4338ca">On miss → GET /list/&lt;dir&gt;</text>
+
+  <!-- Card 4: Metadata cache -->
+  <rect x="346" y="372" width="256" height="185" rx="10" fill="#eef2ff" stroke="#a5b4fc" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="346" y="372" width="256" height="6" rx="3" fill="#4f46e5"/>
+  <text x="360" y="402" font-size="13.5" font-weight="bold" fill="#4338ca">Metadata cache</text>
+  <text x="360" y="424" font-size="10.5" fill="#334155">Scope: shared (whole mount)</text>
+  <text x="360" y="440" font-size="10.5" fill="#334155">Key: file path</text>
+  <text x="360" y="456" font-size="10.5" fill="#334155">Populated by: getattr/lookup</text>
+  <text x="360" y="472" font-size="10.5" fill="#334155">TTL: 500ms, max 1024 (LRU)</text>
+  <text x="360" y="488" font-size="10.5" fill="#334155">Invalidated: setattr/rename/write</text>
+  <text x="360" y="510" font-size="11" font-weight="bold" fill="#4338ca">On miss → GET /meta/&lt;path&gt;</text>
+
+  <!-- Card 5: Negative lookup cache -->
+  <rect x="622" y="372" width="256" height="185" rx="10" fill="#f5f3ff" stroke="#c4b5fd" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="622" y="372" width="256" height="6" rx="3" fill="#7c3aed"/>
+  <text x="636" y="402" font-size="13.5" font-weight="bold" fill="#6d28d9">Negative lookup cache</text>
+  <text x="636" y="424" font-size="10.5" fill="#334155">Scope: shared (whole mount)</text>
+  <text x="636" y="440" font-size="10.5" fill="#334155">Key: path known to be absent</text>
+  <text x="636" y="456" font-size="10.5" fill="#334155">Populated by: lookup() → 404</text>
+  <text x="636" y="472" font-size="10.5" fill="#334155">TTL: short, fixed</text>
+  <text x="636" y="488" font-size="10.5" fill="#334155">Purpose: skip repeat 404 probes</text>
+  <text x="636" y="510" font-size="11" font-weight="bold" fill="#6d28d9">On hit → ENOENT, 0 HTTP calls</text>
+
+  <!-- filer box -->
+  <rect x="980" y="230" width="280" height="240" rx="14" fill="#f8fafc" stroke="#334155" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1000" y="258" font-size="15" font-weight="bold" fill="#0f172a">filer (REST server)</text>
+  <text x="1000" y="288" font-size="11.5" font-family="monospace" fill="#1e293b">GET /list/&lt;dir&gt;</text>
+  <text x="1000" y="308" font-size="11.5" font-family="monospace" fill="#1e293b">GET /meta/&lt;path&gt;</text>
+  <text x="1000" y="328" font-size="11.5" font-family="monospace" fill="#1e293b">GET /files/&lt;path&gt;  (Range)</text>
+  <text x="1000" y="348" font-size="11.5" font-family="monospace" fill="#1e293b">PUT /files/&lt;path&gt;  (Content-Range)</text>
+
+  <!-- relationship arrow -->
+  <text x="940" y="318" text-anchor="middle" font-size="11" font-style="italic" fill="#64748b">HTTP — only on</text>
+  <text x="940" y="331" text-anchor="middle" font-size="11" font-style="italic" fill="#64748b">cache miss / flush</text>
+  <line x1="900" y1="350" x2="978" y2="350" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow2)"/>
+
+  <!-- legend -->
+  <rect x="60" y="620" width="16" height="16" rx="3" fill="#0d9488"/>
+  <text x="82" y="633" font-size="11.5" fill="#334155">read cache — per file handle</text>
+  <rect x="330" y="620" width="16" height="16" rx="3" fill="#ea580c"/>
+  <text x="352" y="633" font-size="11.5" fill="#334155">write buffer — per file handle</text>
+  <rect x="620" y="620" width="16" height="16" rx="3" fill="#4f46e5"/>
+  <text x="642" y="633" font-size="11.5" fill="#334155">shared cache — TTL + LRU</text>
+  <rect x="900" y="620" width="16" height="16" rx="3" fill="#7c3aed"/>
+  <text x="922" y="633" font-size="11.5" fill="#334155">shared cache — negative result</text>
+</svg>

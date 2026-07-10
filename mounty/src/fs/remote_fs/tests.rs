@@ -34,6 +34,23 @@ mod tests {
     }
 
     #[test]
+    fn test_config_buffer_sizes_map_to_file_handle_buffers() {
+        use crate::fs::config::FuseConfig;
+
+        let backend = Arc::new(FakeBackend::new());
+        let config = FuseConfig::default()
+            .with_max_buffer_size(8 * 1024 * 1024)
+            .with_chunk_size(4 * 1024 * 1024);
+        let mut fs = RemoteFileSystem::with_config(backend, config);
+
+        let fh = fs.fh_manager.alloc_fh(0, 0);
+        let state = fs.fh_manager.get_fh_state_ref(fh).unwrap();
+
+        assert_eq!(state.read_buf_cap, 8 * 1024 * 1024);
+        assert_eq!(state.write_buf_cap, 4 * 1024 * 1024);
+    }
+
+    #[test]
     fn test_file_entry_to_attr_values() {
         use crate::fs::config::FuseConfig;
         use crate::fs::http::FileEntry;
