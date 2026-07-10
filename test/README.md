@@ -64,3 +64,51 @@ If throughput is below 75% of the baseline, the script emits a warning but does 
 5. **Transfers Data** by generating a 1GB randomized payload (configurable via `--size-mb`) and copying it over the FUSE mount.
 6. **Validates** by comparing throughput against the `iperf3` baseline and verifying the `SHA-256` checksums of the original and transferred files.
 7. **Cleans up** all temporary files, mountpoints, and background processes regardless of success or failure.
+
+## Latency Smoke Test
+
+`run_latency_smoke.sh` is a small end-to-end latency smoke test for ordinary
+filesystem operations through the mountpoint. It starts real `filer` and
+`mounty` processes, then measures operations such as `mkdir`, `cp`, `ls`,
+`stat`, partial read, `cat`, `mv`, `rm`, and `rmdir`.
+
+Example:
+
+```bash
+./test/run_latency_smoke.sh --iterations 20 --threshold-ms 500 --size-kb 64
+```
+
+Latency above the threshold is reported as a warning. Functional failures still
+fail the script.
+
+## Chaos Smoke Test
+
+`test_chaos.py` runs concurrent FUSE operations with checksum validation. It
+uses dynamic temporary directories and ports.
+
+Small local smoke:
+
+```bash
+./test/test_chaos.py --skip-build --workers 1 --files-per-worker 1 --max-file-kb 4
+```
+
+Default run:
+
+```bash
+./test/test_chaos.py
+```
+
+## Chunk Matrix Smoke
+
+`run_chunk_experiment.sh` is configurable so it can be used both for a small
+smoke and for a full manual matrix.
+
+Small local smoke:
+
+```bash
+SKIP_BUILD=1 RESULTS_FILE=/tmp/chunk_matrix_smoke.md \
+  ./test/run_chunk_experiment.sh --file-sizes 1 --chunks 1048576
+```
+
+Full matrix defaults remain intentionally manual/ad-hoc because they are slow
+and environment-sensitive.

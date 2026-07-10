@@ -1,177 +1,253 @@
 #!/usr/bin/env python3
-import os
-import sys
-import time
-import shutil
-import random
-import string
+import argparse
 import hashlib
+import http.client
+import os
+import random
+import shutil
+import socket
 import subprocess
+import sys
+import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
-MOUNT_DIR = "/tmp/mounty-chaos-mnt"
-FILER_PORT = 3001
-SERVER_URL = f"http://localhost:{FILER_PORT}"
+
+def free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
 
 def generate_random_file(path, size_bytes):
-    with open(path, 'wb') as f:
-        f.write(os.urandom(size_bytes))
+    data = os.urandom(size_bytes)
+    with open(path, "wb") as f:
+        f.write(data)
+    return data
+
+
+def hash_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
 
 def hash_file(path):
     h = hashlib.sha256()
-    with open(path, 'rb') as f:
+    with open(path, "rb") as f:
         while chunk := f.read(8192):
             h.update(chunk)
     return h.hexdigest()
 
+
+def wait_for_http(port, timeout=10):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+            conn.request("GET", "/list")
+            resp = conn.getresponse()
+            resp.read()
+            conn.close()
+            if resp.status == 200:
+                return True
+        except OSError:
+            pass
+        time.sleep(0.1)
+    return False
+
+
+def is_mount_active(mount_dir):
+    try:
+        output = subprocess.check_output(["mount"], text=True)
+    except subprocess.SubprocessError:
+        return False
+    canonical = os.path.realpath(mount_dir)
+    return mount_dir in output or canonical in output
+
+
+def wait_for_mount(mount_dir, timeout=15):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if is_mount_active(mount_dir):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def unmount(mount_dir):
+    commands = (
+        [["umount", mount_dir], ["diskutil", "unmount", mount_dir]]
+        if sys.platform == "darwin"
+        else [["fusermount3", "-u", mount_dir], ["fusermount", "-u", mount_dir], ["umount", mount_dir]]
+    )
+    for cmd in commands:
+        try:
+            if subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+                return True
+        except FileNotFoundError:
+            continue
+    return False
+
+
 class ChaosTester:
-    def __init__(self, mount_dir, num_workers=10):
+    def __init__(self, mount_dir, num_workers, files_per_worker, max_file_kb):
         self.mount_dir = mount_dir
         self.num_workers = num_workers
+        self.files_per_worker = files_per_worker
+        self.max_file_kb = max_file_kb
         self.errors = []
         self.lock = threading.Lock()
 
-    def report_error(self, e):
+    def report_error(self, err):
         with self.lock:
-            self.errors.append(e)
-            print(f"[!] Error: {e}")
+            self.errors.append(err)
+            print(f"[!] Error: {err}")
 
     def worker_task(self, worker_id):
         try:
-            # 1. Create a directory for this worker
             worker_dir = os.path.join(self.mount_dir, f"worker_{worker_id}")
             os.makedirs(worker_dir, exist_ok=True)
 
-            # 2. Create multiple files concurrently
-            files = []
-            for i in range(5):
-                file_path = os.path.join(worker_dir, f"file_{i}.bin")
-                size = random.randint(1024, 1024 * 1024 * 5) # 1KB to 5MB
-                generate_random_file(file_path, size)
-                files.append((file_path, hash_file(file_path)))
-            
-            # 3. Read and verify files
-            for file_path, original_hash in files:
+            read_files = []
+            for i in range(self.files_per_worker):
+                file_path = os.path.join(worker_dir, f"read_file_{i}.bin")
+                size = random.randint(1024, max(1024, self.max_file_kb * 1024))
+                data = generate_random_file(file_path, size)
+                read_files.append((file_path, hash_bytes(data)))
+
+            for file_path, original_hash in read_files:
                 current_hash = hash_file(file_path)
                 if current_hash != original_hash:
                     raise ValueError(f"Checksum mismatch for {file_path}")
-            
-            # 4. Rename operations
-            new_files = []
-            for file_path, original_hash in files:
+
+            rename_files = []
+            for i in range(self.files_per_worker):
+                file_path = os.path.join(worker_dir, f"rename_file_{i}.bin")
+                size = random.randint(1024, max(1024, self.max_file_kb * 1024))
+                data = generate_random_file(file_path, size)
+                rename_files.append((file_path, hash_bytes(data)))
+
+            renamed_files = []
+            for file_path, original_hash in rename_files:
                 new_path = file_path + "_renamed"
                 os.rename(file_path, new_path)
-                new_files.append((new_path, original_hash))
-            
-            # 5. Verify after rename
-            for file_path, original_hash in new_files:
+                renamed_files.append((new_path, original_hash))
+
+            for file_path, original_hash in renamed_files:
                 current_hash = hash_file(file_path)
                 if current_hash != original_hash:
                     raise ValueError(f"Checksum mismatch after rename for {file_path}")
-            
-            # 6. Delete some files
-            for file_path, _ in new_files[:2]:
+
+            for file_path, _ in renamed_files[: max(1, len(renamed_files) // 2)]:
                 os.remove(file_path)
-            
-            # 7. Create nested directories
+
             nested_dir = os.path.join(worker_dir, "nested", "dirs", "test")
             os.makedirs(nested_dir, exist_ok=True)
-            
-            # 8. List directory
             os.listdir(worker_dir)
-            
-        except Exception as e:
-            self.report_error(e)
+        except Exception as err:
+            self.report_error(err)
 
     def run(self):
-        print(f"[*] Starting chaos test with {self.num_workers} workers...")
+        print(
+            f"[*] Starting chaos test with {self.num_workers} workers, "
+            f"{self.files_per_worker} files/worker, max {self.max_file_kb}KB/file..."
+        )
         with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
             futures = [executor.submit(self.worker_task, i) for i in range(self.num_workers)]
             for future in futures:
                 future.result()
-        
+
         if self.errors:
             print(f"[!] Chaos test completed with {len(self.errors)} errors.")
             return False
-        else:
-            print("[*] Chaos test completed successfully with 0 errors.")
-            return True
 
-def cleanup(filer_proc, mounty_proc):
+        print("[*] Chaos test completed successfully with 0 errors.")
+        return True
+
+
+def cleanup(filer_proc, mounty_proc, mount_dir, base_dir):
     print("[*] Cleaning up...")
     if mounty_proc:
+        unmount(mount_dir)
         try:
-            if sys.platform == "darwin":
-                subprocess.run(["umount", MOUNT_DIR], stderr=subprocess.DEVNULL)
-            else:
-                subprocess.run(["fusermount", "-u", MOUNT_DIR], stderr=subprocess.DEVNULL)
             mounty_proc.terminate()
             mounty_proc.wait(timeout=5)
-        except Exception as e:
-            print(f"[!] Failed to stop mounty: {e}")
+        except Exception as err:
+            print(f"[!] Failed to stop mounty gracefully: {err}")
             mounty_proc.kill()
-    
+            mounty_proc.wait(timeout=5)
+
     if filer_proc:
         try:
             filer_proc.terminate()
             filer_proc.wait(timeout=5)
-        except Exception as e:
-            print(f"[!] Failed to stop filer: {e}")
+        except Exception as err:
+            print(f"[!] Failed to stop filer gracefully: {err}")
             filer_proc.kill()
-    
-    if os.path.exists(MOUNT_DIR):
-        try:
-            os.rmdir(MOUNT_DIR)
-        except:
-            pass
+            filer_proc.wait(timeout=5)
+
+    shutil.rmtree(mount_dir, ignore_errors=True)
+    shutil.rmtree(base_dir, ignore_errors=True)
     print("[*] Cleanup complete.")
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run a FUSE chaos test against filer + mounty.")
+    parser.add_argument("--workers", type=int, default=20)
+    parser.add_argument("--files-per-worker", type=int, default=5)
+    parser.add_argument("--max-file-kb", type=int, default=5 * 1024)
+    parser.add_argument("--skip-build", action="store_true")
+    return parser.parse_args()
+
+
 def main():
-    proj_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    
-    print("[*] Building mounty and filer (release mode)...")
-    subprocess.run(["cargo", "build", "--release", "--manifest-path", os.path.join(proj_dir, "filer", "Cargo.toml")], check=True)
-    subprocess.run(["cargo", "build", "--release", "--manifest-path", os.path.join(proj_dir, "mounty", "Cargo.toml")], check=True)
+    args = parse_args()
+    proj_dir = Path(__file__).resolve().parent.parent
+    port = free_port()
+    server_url = f"http://127.0.0.1:{port}"
+    base_dir = tempfile.mkdtemp(prefix="filer-chaos-base-")
+    mount_dir = tempfile.mkdtemp(prefix="mounty-chaos-mnt-")
 
-    filer_bin = os.path.join(proj_dir, "filer", "target", "release", "remote-fs-server")
-    mounty_bin = os.path.join(proj_dir, "mounty", "target", "release", "mounty")
+    if not args.skip_build:
+        print("[*] Building mounty and filer (release mode)...")
+        subprocess.run(["cargo", "build", "--release", "--manifest-path", str(proj_dir / "filer" / "Cargo.toml")], check=True)
+        subprocess.run(["cargo", "build", "--release", "--manifest-path", str(proj_dir / "mounty" / "Cargo.toml")], check=True)
+    else:
+        print("[*] Skipping build step (--skip-build).")
 
-    os.makedirs(MOUNT_DIR, exist_ok=True)
-    
+    filer_bin = proj_dir / "filer" / "target" / "release" / "remote-fs-server"
+    mounty_bin = proj_dir / "mounty" / "target" / "release" / "mounty"
+
     filer_proc = None
     mounty_proc = None
     try:
-        print(f"[*] Starting filer server on port {FILER_PORT}...")
+        print(f"[*] Starting filer server on port {port}...")
         env = os.environ.copy()
-        env["BASE_DIR"] = "/tmp/filer-test-base"
-        os.makedirs(env["BASE_DIR"], exist_ok=True)
-        filer_proc = subprocess.Popen([filer_bin, "--port", str(FILER_PORT)], env=env)
-        time.sleep(2)
-        
-        print(f"[*] Creating mountpoint {MOUNT_DIR} and starting mounty...")
-        mounty_proc = subprocess.Popen([mounty_bin, SERVER_URL, MOUNT_DIR])
-        time.sleep(3)
+        env["BASE_DIR"] = base_dir
+        filer_proc = subprocess.Popen([str(filer_bin), "--port", str(port)], env=env)
+        if not wait_for_http(port):
+            raise RuntimeError("filer did not become ready")
 
-        if filer_proc.poll() is not None:
-            print("[!] Filer failed to start.")
+        print(f"[*] Starting mounty at {mount_dir}...")
+        mounty_proc = subprocess.Popen([str(mounty_bin), server_url, mount_dir])
+        if not wait_for_mount(mount_dir):
+            raise RuntimeError("mounty did not mount")
+
+        tester = ChaosTester(
+            mount_dir,
+            num_workers=args.workers,
+            files_per_worker=args.files_per_worker,
+            max_file_kb=args.max_file_kb,
+        )
+        if not tester.run():
             sys.exit(1)
-            
-        if mounty_proc.poll() is not None:
-            print("[!] Mounty failed to start.")
-            sys.exit(1)
-            
-        tester = ChaosTester(MOUNT_DIR, num_workers=20)
-        success = tester.run()
-        
-        if not success:
-            sys.exit(1)
-            
-    except Exception as e:
-        print(f"[!] Unexpected error: {e}")
+    except Exception as err:
+        print(f"[!] Unexpected error: {err}")
         sys.exit(1)
     finally:
-        cleanup(filer_proc, mounty_proc)
+        cleanup(filer_proc, mounty_proc, mount_dir, base_dir)
+
 
 if __name__ == "__main__":
     main()

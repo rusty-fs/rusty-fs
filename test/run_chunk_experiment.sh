@@ -1,60 +1,92 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
-# Configurazione del test
-BW_LIMIT=100
-PACKET_LOSS=5
+BW_LIMIT="${BW_LIMIT:-}"
+PACKET_LOSS="${PACKET_LOSS:-}"
+FILE_SIZES_CSV="${FILE_SIZES_CSV:-10,50,200,500,2048}"
+CHUNKS_CSV="${CHUNKS_CSV:-1048576,4194304,16777216}"
+RESULTS_FILE="${RESULTS_FILE:-/tmp/chunk_matrix_results.md}"
+SKIP_BUILD_AFTER_FIRST="${SKIP_BUILD_AFTER_FIRST:-1}"
+
+usage() {
+    echo "Usage: $0 [--file-sizes 10,50] [--chunks 1048576,4194304] [--bw-limit Mbit/s] [--packet-loss %] [--results-file path]"
+    exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --file-sizes) FILE_SIZES_CSV="$2"; shift ;;
+        --chunks) CHUNKS_CSV="$2"; shift ;;
+        --bw-limit) BW_LIMIT="$2"; shift ;;
+        --packet-loss) PACKET_LOSS="$2"; shift ;;
+        --results-file) RESULTS_FILE="$2"; shift ;;
+        -h|--help) usage ;;
+        *) echo "Unknown parameter: $1"; usage ;;
+    esac
+    shift
+done
+
+IFS=',' read -r -a FILE_SIZES <<< "$FILE_SIZES_CSV"
+IFS=',' read -r -a CHUNKS <<< "$CHUNKS_CSV"
 
 echo "=========================================================="
-echo " Esperimento Dimensione Blocco FUSE (Matrice File/Chunk)"
-echo " Banda: $BW_LIMIT Mbit/s | Loss: $PACKET_LOSS%"
+echo " FUSE Chunk Matrix Experiment"
+echo " File sizes: $FILE_SIZES_CSV MB"
+echo " Chunks: $CHUNKS_CSV bytes"
+echo " Bandwidth: ${BW_LIMIT:-unlimited} | Loss: ${PACKET_LOSS:-0}%"
+echo " Results: $RESULTS_FILE"
 echo "=========================================================="
 
-# Matrice dei parametri
-FILE_SIZES=("10" "50" "200" "500" "2048")  # Dimensioni file in MB (2048 = 2 GB)
-CHUNKS=("1048576" "4194304" "16777216") # Dimensioni chunk: 1MB, 4MB, 16MB
-RESULTS_FILE="/tmp/chunk_matrix_results.md"
-
-echo "# Risultati Esperimento a Matrice" > $RESULTS_FILE
-echo "| Payload (MB) | Chunk Size | Velocità (Mbit/s) |" >> $RESULTS_FILE
-echo "|--------------|------------|-------------------|" >> $RESULTS_FILE
-
-for SIZE_MB in "${FILE_SIZES[@]}"; do
+{
+    echo "# Chunk Matrix Results"
     echo ""
-    echo "=========================================================="
-    echo " Inizio test con Payload: $SIZE_MB MB"
-    echo "=========================================================="
-    
+    echo "| Payload (MB) | Chunk Size | Max Buffer | Speed (Mbit/s) | Status |"
+    echo "|---:|---:|---:|---:|---|"
+} > "$RESULTS_FILE"
+
+FIRST_RUN=1
+for SIZE_MB in "${FILE_SIZES[@]}"; do
     for CHUNK in "${CHUNKS[@]}"; do
         BUFFER=$((CHUNK * 2))
-        
-        if [ "$CHUNK" -ge 1048576 ]; then
-            LABEL="$((CHUNK / 1048576)) MB"
+        echo ""
+        echo "[*] Test: payload=${SIZE_MB}MB chunk=${CHUNK} buffer=${BUFFER}"
+
+        export MOUNTY_CHUNK_SIZE="$CHUNK"
+        export MOUNTY_MAX_BUFFER_SIZE="$BUFFER"
+
+        ARGS=(--size-mb "$SIZE_MB")
+        if [[ -n "$BW_LIMIT" ]]; then
+            ARGS+=(--bw-limit "$BW_LIMIT")
+        fi
+        if [[ -n "$PACKET_LOSS" ]]; then
+            ARGS+=(--packet-loss "$PACKET_LOSS")
+        fi
+
+        if [[ "$FIRST_RUN" -eq 0 && "$SKIP_BUILD_AFTER_FIRST" = "1" ]]; then
+            OUTPUT=$(SKIP_BUILD=1 ./test/run_perf_tests.sh "${ARGS[@]}" 2>&1) || STATUS=$?
         else
-            LABEL="$((CHUNK / 1024)) KB"
+            OUTPUT=$(./test/run_perf_tests.sh "${ARGS[@]}" 2>&1) || STATUS=$?
         fi
-        
-        echo "[*] -> Test: Payload $SIZE_MB MB | Chunk: $LABEL ..."
-        
-        export MOUNTY_CHUNK_SIZE=$CHUNK
-        export MOUNTY_MAX_BUFFER_SIZE=$BUFFER
-        
-        OUTPUT=$(./test/run_perf_tests.sh --bw-limit "$BW_LIMIT" --size-mb "$SIZE_MB" --packet-loss "$PACKET_LOSS" 2>&1) || true
-        
-        SPEED=$(echo "$OUTPUT" | grep "Actual Transfer Speed:" | awk '{print $5}')
-        
-        if [ -z "$SPEED" ]; then
-            SPEED="FALLITO"
-            echo "$OUTPUT"
+        FIRST_RUN=0
+
+        STATUS=${STATUS:-0}
+        SPEED=$(printf '%s\n' "$OUTPUT" | awk '/Actual Transfer Speed:/ {print $5; exit}')
+        if [[ -z "$SPEED" ]]; then
+            SPEED="N/A"
         fi
-        
-        echo "    -> Risultato: $SPEED Mbit/s"
-        echo "| $SIZE_MB MB | $LABEL | $SPEED |" >> $RESULTS_FILE
+
+        if [[ "$STATUS" -eq 0 ]]; then
+            RESULT="ok"
+        else
+            RESULT="failed"
+            printf '%s\n' "$OUTPUT"
+        fi
+
+        echo "| $SIZE_MB | $CHUNK | $BUFFER | $SPEED | $RESULT |" >> "$RESULTS_FILE"
+        echo "[*] Result: $RESULT speed=${SPEED}"
+        unset STATUS
     done
 done
 
 echo ""
-echo "=========================================================="
-echo " Esperimento Matrice Completato!"
-echo "=========================================================="
-cat $RESULTS_FILE
+echo "[*] Results written to $RESULTS_FILE"
