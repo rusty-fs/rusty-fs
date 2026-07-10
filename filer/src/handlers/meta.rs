@@ -9,7 +9,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 pub async fn meta(
     file_path: Path<String>,
@@ -19,7 +19,7 @@ pub async fn meta(
     let full_path = safe_join_path(&base_dir, &requested_raw)?;
     let requested = requested_raw.trim_start_matches('/').to_string();
 
-    info!("Getting metadata for: {} -> {:?}", requested, full_path);
+    debug!("Getting metadata for: {} -> {:?}", requested, full_path);
 
     match fs::metadata(&full_path) {
         Ok(meta) => {

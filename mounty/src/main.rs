@@ -252,7 +252,7 @@ fn force_unmount(mountpoint: &Path) {
 fn run_unmount_command(command: &str, args: &[&str], mountpoint: &Path, label: &str) -> bool {
     match Command::new(command).args(args).arg(mountpoint).status() {
         Ok(status) if status.success() => {
-            warn!(
+            debug!(
                 "{} unmount command succeeded: {} {} {}",
                 label,
                 command,

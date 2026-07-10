@@ -10,7 +10,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
-use tracing::error;
+use tracing::{debug, error};
 
 pub async fn list(
     requested_path: Option<Path<String>>,
@@ -80,7 +80,7 @@ pub async fn mkdir(
     let full_path = safe_join_path(&base_dir, &requested_raw)?;
     let requested = requested_raw.trim_start_matches('/').to_string();
 
-    tracing::info!("Creating directory: {} -> {:?}", requested, full_path);
+    debug!("Creating directory: {} -> {:?}", requested, full_path);
 
     match fs::create_dir_all(&full_path) {
         Ok(_) => Ok(StatusCode::CREATED),
@@ -99,7 +99,7 @@ pub async fn delete_path(
     let full_path = safe_join_path(&base_dir, &requested_raw)?;
     let requested = requested_raw.trim_start_matches('/').to_string();
 
-    tracing::info!("Deleting path: {} -> {:?}", requested, full_path);
+    debug!("Deleting path: {} -> {:?}", requested, full_path);
 
     match fs::metadata(&full_path) {
         Ok(meta) => {

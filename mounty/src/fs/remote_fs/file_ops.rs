@@ -367,7 +367,7 @@ impl RemoteFileSystem {
         let buf_len = buf.len();
 
         tracing::debug!(
-            "[DIAG] flush_write_buffer: path={} offset={} size={}",
+            "flush_write_buffer: path={} offset={} size={}",
             path,
             offset,
             buf_len
@@ -387,7 +387,7 @@ impl RemoteFileSystem {
                 .borrow_mut()
                 .push(format!("PUT at offset {}: {}", offset, e));
             tracing::error!(
-                "[DIAG] flush_write_buffer FAILED: path={} offset={} error={}",
+                "flush_write_buffer failed: path={} offset={} error={}",
                 path,
                 offset,
                 e
@@ -396,7 +396,7 @@ impl RemoteFileSystem {
         }
 
         tracing::debug!(
-            "[DIAG] flush_write_buffer OK: path={} offset={} size={}",
+            "flush_write_buffer ok: path={} offset={} size={}",
             path,
             offset,
             buf_len
