@@ -57,7 +57,6 @@ fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| "1048576".to_string());
 
         options.push(MountOption::CUSTOM("noappledouble".to_string()));
-        options.push(MountOption::CUSTOM("noapplexattr".to_string()));
         options.push(MountOption::CUSTOM(format!("iosize={iosize}")));
     }
 

@@ -10,6 +10,23 @@ use std::ffi::OsStr;
 use std::time::SystemTime;
 use tracing::{debug, error, info, trace};
 
+fn is_apple_metadata_xattr(name: &OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|name| name.starts_with("com.apple."))
+}
+
+fn xattr_not_found_errno() -> i32 {
+    #[cfg(target_os = "macos")]
+    {
+        libc::ENOATTR
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        libc::ENODATA
+    }
+}
+
 impl Filesystem for RemoteFileSystem {
     fn init(&mut self, _req: &Request<'_>, config: &mut KernelConfig) -> Result<(), libc::c_int> {
         let desired_write = self.config.max_buffer_size.min(16 * 1024 * 1024) as u32;
@@ -418,32 +435,47 @@ impl Filesystem for RemoteFileSystem {
         &mut self,
         _req: &Request<'_>,
         _ino: u64,
-        _name: &OsStr,
+        name: &OsStr,
         _value: &[u8],
         _flags: i32,
         _position: u32,
         reply: ReplyEmpty,
     ) {
-        reply.error(libc::ENOTSUP);
+        if is_apple_metadata_xattr(name) {
+            trace!("ignoring Apple xattr set for {:?}", name);
+            reply.ok();
+        } else {
+            reply.error(libc::ENOTSUP);
+        }
     }
 
     fn getxattr(
         &mut self,
         _req: &Request<'_>,
         _ino: u64,
-        _name: &OsStr,
+        name: &OsStr,
         _size: u32,
         reply: ReplyXattr,
     ) {
-        reply.error(libc::ENOTSUP);
+        if is_apple_metadata_xattr(name) {
+            trace!("Apple xattr {:?} was not persisted", name);
+            reply.error(xattr_not_found_errno());
+        } else {
+            reply.error(libc::ENOTSUP);
+        }
     }
 
     fn listxattr(&mut self, _req: &Request<'_>, _ino: u64, _size: u32, reply: ReplyXattr) {
-        reply.error(libc::ENOTSUP);
+        reply.size(0);
     }
 
-    fn removexattr(&mut self, _req: &Request<'_>, _ino: u64, _name: &OsStr, reply: ReplyEmpty) {
-        reply.error(libc::ENOTSUP);
+    fn removexattr(&mut self, _req: &Request<'_>, _ino: u64, name: &OsStr, reply: ReplyEmpty) {
+        if is_apple_metadata_xattr(name) {
+            trace!("ignoring Apple xattr remove for {:?}", name);
+            reply.ok();
+        } else {
+            reply.error(libc::ENOTSUP);
+        }
     }
 
     fn access(&mut self, _req: &Request<'_>, _ino: u64, _mask: i32, reply: ReplyEmpty) {
@@ -467,5 +499,26 @@ impl Filesystem for RemoteFileSystem {
             255,       // max filename length
             4096,      // fragment size
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apple_metadata_xattrs_are_ignorable() {
+        assert!(is_apple_metadata_xattr(OsStr::new("com.apple.quarantine")));
+        assert!(is_apple_metadata_xattr(OsStr::new(
+            "com.apple.lastuseddate#PS"
+        )));
+        assert!(is_apple_metadata_xattr(OsStr::new("com.apple.FinderInfo")));
+    }
+
+    #[test]
+    fn non_apple_xattrs_remain_unsupported() {
+        assert!(!is_apple_metadata_xattr(OsStr::new("user.comment")));
+        assert!(!is_apple_metadata_xattr(OsStr::new("security.selinux")));
+        assert!(!is_apple_metadata_xattr(OsStr::new("com.example.attr")));
     }
 }
